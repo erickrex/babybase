@@ -14,6 +14,7 @@ export default function MatchDetailPage() {
   const [detail, setDetail] = useState<MatchDetail | null>(null);
   const [similarNames, setSimilarNames] = useState<SimilarName[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingSimilar, setIsLoadingSimilar] = useState(false);
   const [showSimilar, setShowSimilar] = useState(false);
 
   useEffect(() => {
@@ -40,8 +41,10 @@ export default function MatchDetailPage() {
   const handleMoreLikeThis = async () => {
     if (!nameId) return;
     setShowSimilar(true);
+    setIsLoadingSimilar(true);
     const names = await getSimilarNames(nameId);
     setSimilarNames(names);
+    setIsLoadingSimilar(false);
   };
 
   if (isLoading) {
@@ -162,8 +165,10 @@ export default function MatchDetailPage() {
           <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wide mb-3">
             Similar Names
           </h2>
-          {similarNames.length === 0 ? (
+          {isLoadingSimilar ? (
             <p className="text-text-muted text-sm">Loading similar names...</p>
+          ) : similarNames.length === 0 ? (
+            <p className="text-text-muted text-sm">No similar names available yet.</p>
           ) : (
             <div className="space-y-2">
               {similarNames.map((n) => (
