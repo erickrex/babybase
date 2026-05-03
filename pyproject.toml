@@ -1,0 +1,39 @@
+[project]
+name = "babybase"
+version = "0.1.0"
+description = "BabyBase — Tinder for baby names. Semantic couple-aware name recommendations."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "django>=5.2,<6.0",
+    "djangorestframework>=3.15",
+    "django-cors-headers>=4.4",
+    "python-decouple>=3.8",
+    "argon2-cffi>=23.1",
+    "psycopg[binary]>=3.2",
+    "qdrant-client>=1.9",
+    "openai>=1.30",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-django>=4.8",
+    "hypothesis>=6.100",
+    "factory-boy>=3.3",
+    "ruff>=0.4",
+]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
