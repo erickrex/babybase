@@ -2,7 +2,7 @@
 
 from django.urls import path
 
-from core.views.auth import health_check_view, login_view, register_view
+from core.views.auth import health_check_view, login_view, logout_view, register_view
 from core.views.constellation import constellation_view
 from core.views.couples import couple_invite_view, couple_me_view
 from core.views.onboarding import onboarding_preferences_view
@@ -20,6 +20,7 @@ urlpatterns = [
     # Auth
     path("auth/register/", register_view, name="auth-register"),
     path("auth/login/", login_view, name="auth-login"),
+    path("auth/logout/", logout_view, name="auth-logout"),
     # Profile
     path("profile/me/", profile_me_view, name="profile-me"),
     # Couples

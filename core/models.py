@@ -176,9 +176,6 @@ class DeckMode(models.TextChoices):
     BRIDGE_NAMES = "bridge_names", "Bridge Names"
     MORE_LIKE_THIS = "more_like_this", "More Like This"
     WILDCARD = "wildcard", "Wildcard"
-    LOCAL_FIT = "local_fit", "Local Fit"
-    HERITAGE_FIRST = "heritage_first", "Heritage First"
-    STYLE_FIRST = "style_first", "Style First"
 
 
 class LengthCategory(models.TextChoices):

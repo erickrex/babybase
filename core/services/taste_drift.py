@@ -78,22 +78,6 @@ def compute_taste_drift(couple: Couple) -> dict:
     }
 
 
-def recompute_parent_vectors_after_session(couple: Couple) -> None:
-    """
-    Recompute parent taste vectors after a swipe session.
-
-    This is called after swipes are recorded to keep the couple's
-    query embedding fresh for the next deck generation.
-    The actual recomputation happens lazily on next deck request
-    via build_couple_query_embedding, so this function just ensures
-    any cached state is invalidated.
-    """
-    # Currently, vectors are recomputed on each deck generation request
-    # (not cached long-term), so no explicit invalidation needed.
-    # This function exists as a hook for future caching optimization.
-    pass
-
-
 def _get_recent_liked_names(couple: Couple, limit: int = 50):
     """Get the most recent liked names for the couple (both parents)."""
     from core.models import Name

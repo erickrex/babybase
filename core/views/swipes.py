@@ -3,7 +3,7 @@
 import logging
 
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -25,12 +25,14 @@ from core.services.swipes import (
     record_swipe,
     validate_swipe,
 )
+from core.throttles import SwipeRateThrottle
 
 logger = logging.getLogger(__name__)
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@throttle_classes([SwipeRateThrottle])
 def swipe_view(request: Request) -> Response:
     """
     Record a swipe action on a name.

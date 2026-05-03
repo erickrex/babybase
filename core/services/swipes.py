@@ -6,7 +6,7 @@ Handles swipe recording, mutual match detection, and similar name retrieval.
 import logging
 
 from django.contrib.auth import get_user_model
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 
 from core.models import (
     Couple,
@@ -97,13 +97,14 @@ def record_swipe(
 
     # Try to create; handle duplicate gracefully
     try:
-        swipe = Swipe.objects.create(
-            couple=couple,
-            user=user,
-            name_id=name_id,
-            action=action,
-            source_deck=source_deck,
-        )
+        with transaction.atomic():
+            swipe = Swipe.objects.create(
+                couple=couple,
+                user=user,
+                name_id=name_id,
+                action=action,
+                source_deck=source_deck,
+            )
         return swipe, True
     except IntegrityError:
         # Duplicate swipe — return existing

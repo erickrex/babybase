@@ -161,13 +161,10 @@ def _build_query_embedding_for_mode(couple: Couple, mode: str) -> list[float]:
 
 def _get_excluded_name_ids(couple: Couple) -> list[str]:
     """Get all name IDs previously swiped by either parent in this couple."""
-    try:
-        swiped_name_ids = list(
-            couple.swipes.values_list("name_id", flat=True).distinct()
-        )
-        return [str(nid) for nid in swiped_name_ids]
-    except Exception:
-        return []
+    swiped_name_ids = list(
+        couple.swipes.values_list("name_id", flat=True).distinct()
+    )
+    return [str(nid) for nid in swiped_name_ids]
 
 
 def _get_excluded_point_ids(name_ids: list[str]) -> list[str]:
@@ -177,15 +174,12 @@ def _get_excluded_point_ids(name_ids: list[str]) -> list[str]:
 
     from core.models import NameVectorIndexRef
 
-    try:
-        point_ids = list(
-            NameVectorIndexRef.objects.filter(
-                name_id__in=name_ids
-            ).values_list("qdrant_point_id", flat=True)
-        )
-        return [str(pid) for pid in point_ids]
-    except Exception:
-        return []
+    point_ids = list(
+        NameVectorIndexRef.objects.filter(
+            name_id__in=name_ids
+        ).values_list("qdrant_point_id", flat=True)
+    )
+    return [str(pid) for pid in point_ids]
 
 
 def _build_payload_filters(profile: dict) -> dict:

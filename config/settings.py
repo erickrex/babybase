@@ -127,6 +127,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "login": "5/15min",
         "general": "1000/hour",
+        "swipe": "200/hour",
     },
 }
 

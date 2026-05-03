@@ -64,3 +64,10 @@ class GeneralAPIRateThrottle(FlexibleUserRateThrottle):
 
     scope = "general"
     rate = "1000/hour"
+
+
+class SwipeRateThrottle(FlexibleUserRateThrottle):
+    """Rate limit swipe actions: 200 per hour."""
+
+    scope = "swipe"
+    rate = "200/hour"
