@@ -175,9 +175,8 @@ LOGGING = {
     },
     "loggers": {
         "core": {
-            "handlers": ["console"],
             "level": LOG_LEVEL,
-            "propagate": False,
+            "propagate": True,
         },
         "django.request": {
             "handlers": ["console"],

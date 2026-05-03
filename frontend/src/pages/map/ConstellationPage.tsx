@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import api from '../../services/api';
 
 interface NamePoint {
@@ -98,7 +97,6 @@ export default function ConstellationPage() {
   const [lastPinchDist, setLastPinchDist] = useState<number | null>(null);
 
   const svgRef = useRef<SVGSVGElement>(null);
-  const navigate = useNavigate();
 
   // SVG viewport dimensions
   const WIDTH = 450;
@@ -242,11 +240,6 @@ export default function ConstellationPage() {
   function handleTouchEnd() {
     setIsPanning(false);
     setLastPinchDist(null);
-  }
-
-  // Navigate to deck with cluster filter
-  function handleExploreCluster(cluster: string) {
-    navigate(`/deck?mode=style_first&cluster=${encodeURIComponent(cluster)}`);
   }
 
   if (isLoading) {
@@ -417,12 +410,6 @@ export default function ConstellationPage() {
             <p className="text-xs text-text-muted">
               {tooltip.name.age_style_category} · {tooltip.name.gender_usage.join('/')}
             </p>
-            <button
-              onClick={() => handleExploreCluster(tooltip.name!.cluster)}
-              className="mt-2 text-xs text-primary font-medium"
-            >
-              Explore Similar →
-            </button>
           </div>
         )}
       </div>
@@ -435,17 +422,16 @@ export default function ConstellationPage() {
             .sort((a, b) => b.count - a.count)
             .slice(0, 8)
             .map((cluster) => (
-              <button
+              <div
                 key={cluster.label}
-                onClick={() => handleExploreCluster(cluster.label)}
-                className="flex items-center gap-1 px-2 py-1 rounded-full bg-bg-muted border border-border text-xs text-text-secondary hover:border-primary transition-colors"
+                className="flex items-center gap-1 px-2 py-1 rounded-full bg-bg-muted border border-border text-xs text-text-secondary"
               >
                 <span
                   className="w-2 h-2 rounded-full"
                   style={{ backgroundColor: getClusterColor(cluster.label) }}
                 />
                 {cluster.label} ({cluster.count})
-              </button>
+              </div>
             ))}
         </div>
       </div>

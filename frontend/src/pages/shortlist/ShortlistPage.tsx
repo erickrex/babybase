@@ -42,15 +42,6 @@ export default function ShortlistPage() {
     });
   }, [loadShortlist]);
 
-  const moveItem = (index: number, direction: 'up' | 'down') => {
-    const newItems = [...items];
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= newItems.length) return;
-
-    [newItems[index], newItems[targetIndex]] = [newItems[targetIndex], newItems[index]];
-    setItems(newItems);
-  };
-
   const toggleCompareSelection = (id: string) => {
     setSelectedForCompare((prev) => {
       if (prev.includes(id)) return prev.filter((x) => x !== id);
@@ -108,6 +99,11 @@ export default function ShortlistPage() {
           Select 2 names to compare side by side
         </p>
       )}
+      {!compareMode && (
+        <p className="text-xs text-text-muted mb-4">
+          Ranked by match strength
+        </p>
+      )}
 
       {/* Ordered list */}
       <div className="space-y-2 mb-6">
@@ -142,28 +138,6 @@ export default function ShortlistPage() {
                 ))}
               </div>
             </div>
-
-            {/* Reorder buttons (when not in compare mode) */}
-            {!compareMode && (
-              <div className="flex flex-col gap-0.5">
-                <button
-                  onClick={() => moveItem(index, 'up')}
-                  disabled={index === 0}
-                  className="w-6 h-6 rounded bg-bg-muted text-text-muted text-xs flex items-center justify-center disabled:opacity-30 hover:text-text-secondary"
-                  aria-label="Move up"
-                >
-                  ↑
-                </button>
-                <button
-                  onClick={() => moveItem(index, 'down')}
-                  disabled={index === items.length - 1}
-                  className="w-6 h-6 rounded bg-bg-muted text-text-muted text-xs flex items-center justify-center disabled:opacity-30 hover:text-text-secondary"
-                  aria-label="Move down"
-                >
-                  ↓
-                </button>
-              </div>
-            )}
           </div>
         ))}
       </div>

@@ -21,8 +21,16 @@ export default function OnboardingGuard({ children }: { children: ReactNode }) {
     return <Navigate to="/onboarding/partner" replace />;
   }
 
+  if (coupleState.couple?.status !== 'active') {
+    return <Navigate to="/onboarding/partner" replace />;
+  }
+
   if (!coupleState.onboardingComplete.user) {
     return <Navigate to="/onboarding/preferences" replace />;
+  }
+
+  if (!coupleState.onboardingComplete.partner) {
+    return <Navigate to="/onboarding/partner" replace />;
   }
 
   return <>{children}</>;

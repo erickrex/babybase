@@ -34,6 +34,7 @@ addopts = "-v --tb=short"
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+extend-exclude = ["core/migrations"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
