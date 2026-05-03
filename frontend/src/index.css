@@ -1,0 +1,146 @@
+@import "tailwindcss";
+
+/*
+ * BabyBase Design Tokens as CSS Custom Properties
+ * Warm, emotional aesthetic — amber/coral palette
+ */
+@theme {
+  /* Primary palette */
+  --color-primary: #f59e0b;
+  --color-primary-light: #fbbf24;
+  --color-primary-dark: #d97706;
+  --color-primary-muted: #fef3c7;
+
+  /* Coral accent */
+  --color-coral: #fb7185;
+  --color-coral-light: #fecdd3;
+  --color-coral-dark: #e11d48;
+
+  /* Backgrounds */
+  --color-bg: #fffbf5;
+  --color-bg-card: #ffffff;
+  --color-bg-muted: #fef7ed;
+
+  /* Text */
+  --color-text: #1c1917;
+  --color-text-secondary: #57534e;
+  --color-text-muted: #a8a29e;
+
+  /* Borders */
+  --color-border: #e7e5e4;
+  --color-border-focus: #f59e0b;
+
+  /* Semantic */
+  --color-success: #10b981;
+  --color-error: #ef4444;
+  --color-info: #3b82f6;
+
+  /* Swipe feedback */
+  --color-swipe-like: #10b981;
+  --color-swipe-dislike: #ef4444;
+  --color-swipe-maybe: #f59e0b;
+
+  /* Match celebration */
+  --color-match-gold: #fbbf24;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-elevated: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --shadow-glow: 0 0 20px rgba(251, 191, 36, 0.25);
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+
+  /* Spacing */
+  --spacing-xs: 4px;
+  --spacing-app-sm: 8px;
+  --spacing-app-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 20px;
+  --spacing-2xl: 24px;
+  --spacing-3xl: 32px;
+  --spacing-4xl: 40px;
+  --spacing-5xl: 48px;
+}
+
+/* Base styles */
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background-color: #f5f5f4;
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Prevent overscroll bounce on mobile */
+html, body {
+  overscroll-behavior: none;
+}
+
+/* Smooth touch scrolling */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/*
+ * Instagram-style portrait container.
+ * 50% width on desktop with blank sidebars, full-width on mobile/tablet.
+ */
+.portrait-container {
+  width: 100%;
+  min-height: 100vh;
+  margin-left: auto;
+  margin-right: auto;
+  background-color: var(--color-bg);
+  position: relative;
+}
+
+@media (min-width: 1024px) {
+  .portrait-container {
+    max-width: 50vw;
+    border-left: 1px solid var(--color-border);
+    border-right: 1px solid var(--color-border);
+    box-shadow: var(--shadow-card);
+  }
+}
+
+/*
+ * Bottom nav — matches portrait container width and positioning.
+ */
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  background-color: var(--color-bg-card);
+  border-top: 1px solid var(--color-border);
+  z-index: 50;
+}
+
+@media (min-width: 1024px) {
+  .bottom-nav {
+    max-width: 50vw;
+  }
+}
+
+/* Animations for match celebration */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0.8); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
