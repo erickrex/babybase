@@ -192,17 +192,18 @@ def _get_liked_vectors_for_user(couple: Couple, user) -> list[list[float]]:
 # ---------------------------------------------------------------------------
 
 
-def save_preferences(user: "User", couple: Couple, answers: dict) -> OnboardingResponse:
+def save_preferences(user: "User", couple: Couple | None, answers: dict) -> OnboardingResponse:
     """
-    Store onboarding preferences for a user within their couple.
+    Store onboarding preferences for a user.
 
-    If residence_country is provided, update it on the Couple model.
+    If the user has a couple, saves with that couple and updates residence_country.
+    If couple is None (solo onboarding), saves with couple=None.
     Creates or updates the OnboardingResponse for this user+couple.
     """
     residence_country = answers.pop("residence_country", None)
 
-    # Update residence_country on the couple if provided
-    if residence_country:
+    # Update residence_country on the couple if provided and couple exists
+    if residence_country and couple:
         couple.residence_country = residence_country
         couple.save(update_fields=["residence_country", "updated_at"])
 

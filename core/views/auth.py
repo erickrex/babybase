@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@throttle_classes([])
 def register_view(request: Request) -> Response:
     """Register a new user and return auth token."""
     serializer = RegisterSerializer(data=request.data)
@@ -97,6 +98,7 @@ def login_view(request: Request) -> Response:
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
+@throttle_classes([])
 def health_check_view(request: Request) -> Response:
     """Unauthenticated health check endpoint."""
     return Response(
@@ -112,7 +114,7 @@ def logout_view(request: Request) -> Response:
     try:
         request.user.auth_token.delete()
         logger.info("Logout: user=%s", request.user.email)
-    except Exception:
+    except Token.DoesNotExist:
         logger.warning("Logout failed (no token): user=%s", request.user.email)
 
     return Response(

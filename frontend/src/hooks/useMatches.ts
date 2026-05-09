@@ -117,9 +117,20 @@ export function useMatches() {
   }, []);
 
   useEffect(() => {
-    queueMicrotask(() => {
-      void loadMatches();
-    });
+    let cancelled = false;
+
+    const load = async () => {
+      await Promise.resolve();
+      if (!cancelled) {
+        await loadMatches();
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
   }, [loadMatches]);
 
   const getMatchDetail = useCallback(async (nameId: string): Promise<MatchDetail | null> => {

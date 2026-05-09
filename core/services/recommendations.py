@@ -29,6 +29,11 @@ from core.services.relevance import (
     novelty_score,
     semantic_fit_score,
 )
+from core.services.taste_vectors import (
+    TRUST_THRESHOLDS,
+    compute_confidence_weighted_midpoint,
+    select_phase,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +48,12 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
     Full deck generation pipeline.
 
     Steps:
-    0. Check for existing unexpired deck of same mode — return if found
     1. Build query embedding based on mode
     2. Get excluded name IDs (all previously swiped by either parent)
     3. Query Qdrant with embedding + payload filters + exclusions
     4. Re-rank candidates with scoring formula
     5. Apply diversity constraints
-    6. Persist deck to DB
+    6. Persist deck to DB (with quality metrics)
     7. Return deck
 
     Args:
@@ -59,17 +63,20 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
     Returns:
         The persisted RecommendationDeck with items.
     """
-    # Step 0: Check for existing unexpired deck of same mode
-    existing = RecommendationDeck.objects.filter(
-        couple=couple, mode=mode, expires_at__gt=timezone.now()
-    ).first()
-    if existing:
-        logger.debug("Returning cached deck: id=%s couple=%s mode=%s", existing.id, couple.id, mode)
-        return existing
+    from core.models import UserTasteVector
 
     # Step 1: Build query embedding based on mode
     logger.info("Building new deck: couple=%s mode=%s", couple.id, mode)
     embedding = _build_query_embedding_for_mode(couple, mode)
+
+    # Track whether Phase D was used (for sparse retrieval fallback)
+    phase_used = None
+    fallback_reason = None
+    if mode == DeckMode.BEST_MATCH:
+        phase, _phase_data = select_phase(couple)
+        phase_used = phase
+        if phase == "phase_c":
+            fallback_reason = _phase_data.get("reason")
 
     # Step 2: Get excluded name IDs (all previously swiped)
     excluded_name_ids = _get_excluded_name_ids(couple)
@@ -106,6 +113,48 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
             vector_name="semantic",
         )
 
+    # Step 4b: Sparse retrieval fallback — if Phase D was used and top score < 0.6,
+    # discard results and regenerate with Phase C embedding
+    if phase_used == "phase_d" and candidates:
+        top_score = max(c.get("score", 0.0) for c in candidates)
+        min_retrieval_score = TRUST_THRESHOLDS["min_retrieval_score"]
+        if top_score < min_retrieval_score:
+            logger.warning(
+                "Sparse retrieval fallback: top_score=%.3f < %.1f, "
+                "discarding Phase D results and regenerating with Phase C: couple=%s",
+                top_score,
+                min_retrieval_score,
+                couple.id,
+            )
+            fallback_reason = "top_score_below_threshold"
+            phase_used = "phase_c"
+            # Regenerate with Phase C embedding
+            embedding = build_couple_query_embedding(couple)
+            candidates = search_names(
+                embedding=embedding,
+                filters=filters,
+                limit=retrieval_limit,
+                exclude_ids=excluded_point_ids,
+                vector_name="semantic",
+            )
+            if not candidates:
+                logger.warning(
+                    "No candidates with Phase C fallback filters, retrying without strict filters: couple=%s",
+                    couple.id,
+                )
+                candidates = search_names(
+                    embedding=embedding,
+                    filters={"active": True},
+                    limit=retrieval_limit,
+                    exclude_ids=excluded_point_ids,
+                    vector_name="semantic",
+                )
+
+    # Compute top_retrieval_score from final candidates
+    top_retrieval_score = 0.0
+    if candidates:
+        top_retrieval_score = max(c.get("score", 0.0) for c in candidates)
+
     # Step 5: Re-rank candidates
     parent_a_profile, parent_b_profile = _get_parent_profiles(couple)
     ranked_candidates = _rerank_candidates(
@@ -117,11 +166,55 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
         mode=mode,
     )
 
-    # Step 6: Apply diversity constraints
-    final_candidates = _apply_diversity_constraints(ranked_candidates, deck_size=DECK_SIZE)
+    # Step 5b: Check for sparse pool (fewer than 10 candidates above 0.5)
+    above_threshold_count = sum(1 for c in ranked_candidates if c.get("rerank_score", 0) > 0.5)
+    sparse_pool = above_threshold_count < 10
+    if sparse_pool:
+        logger.info(
+            "Sparse pool detected: only %d candidates above 0.5 (threshold: 10), "
+            "relaxing diversity constraints: couple=%s",
+            above_threshold_count,
+            couple.id,
+        )
 
-    # Step 7: Persist deck to DB
-    deck = _persist_deck(couple, final_candidates, mode, profile)
+    # Step 6: Apply diversity constraints (relaxed if pool is sparse)
+    final_candidates = _apply_diversity_constraints(
+        ranked_candidates, deck_size=DECK_SIZE, relaxed=sparse_pool
+    )
+
+    # Compute quality metrics for logging
+    user_a_confidence = 0.0
+    user_b_confidence = 0.0
+    user_a_swipe_count = 0
+    user_b_swipe_count = 0
+
+    try:
+        vec_a = UserTasteVector.objects.get(user=couple.user_a)
+        user_a_confidence = vec_a.confidence_score
+        user_a_swipe_count = vec_a.swipe_count
+    except UserTasteVector.DoesNotExist:
+        pass
+
+    if couple.user_b is not None:
+        try:
+            vec_b = UserTasteVector.objects.get(user=couple.user_b)
+            user_b_confidence = vec_b.confidence_score
+            user_b_swipe_count = vec_b.swipe_count
+        except UserTasteVector.DoesNotExist:
+            pass
+
+    quality_metrics = {
+        "phase_used": phase_used or "phase_c",
+        "user_a_confidence_score": user_a_confidence,
+        "user_b_confidence_score": user_b_confidence,
+        "user_a_swipe_count": user_a_swipe_count,
+        "user_b_swipe_count": user_b_swipe_count,
+        "top_retrieval_score": top_retrieval_score,
+        "fallback_reason": fallback_reason,
+    }
+
+    # Step 7: Persist deck to DB (with quality metrics)
+    deck = _persist_deck(couple, final_candidates, mode, profile, quality_metrics)
 
     logger.info("Deck generated: id=%s couple=%s mode=%s items=%d", deck.id, couple.id, mode, len(final_candidates))
     return deck
@@ -130,7 +223,23 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
 def _build_query_embedding_for_mode(couple: Couple, mode: str) -> list[float]:
     """Build the appropriate query embedding based on the recommendation mode."""
     if mode == DeckMode.BEST_MATCH:
-        # Standard couple query embedding
+        # Try Phase D (taste vectors) first, fall back to Phase C (stated preferences)
+        phase, phase_data = select_phase(couple)
+        if phase == "phase_d":
+            logger.info(
+                "Using Phase D for couple=%s (conf_a=%.3f, conf_b=%.3f)",
+                couple.id,
+                phase_data["conf_a"],
+                phase_data["conf_b"],
+            )
+            return compute_confidence_weighted_midpoint(
+                phase_data["vec_a"],
+                phase_data["conf_a"],
+                phase_data["vec_b"],
+                phase_data["conf_b"],
+            )
+        # Phase C: fall through to standard couple query embedding
+        logger.info("Using Phase C for couple=%s (reason=%s)", couple.id, phase_data.get("reason"))
         return build_couple_query_embedding(couple)
 
     elif mode == DeckMode.BRIDGE_NAMES:
@@ -333,12 +442,17 @@ def _apply_mode_score_adjustments(
     return final
 
 
-def _apply_diversity_constraints(candidates: list[dict], deck_size: int = 50) -> list[dict]:
+def _apply_diversity_constraints(
+    candidates: list[dict], deck_size: int = 50, relaxed: bool = False
+) -> list[dict]:
     """
     Apply diversity constraints to the ranked candidate list.
 
     Ensures variety in first letter, origin, and style within the final deck.
     Uses a greedy selection approach.
+
+    When relaxed=True (sparse pool: fewer than 10 candidates above 0.5),
+    diversity thresholds are doubled to avoid over-filtering a limited pool.
     """
     if len(candidates) <= deck_size:
         return candidates
@@ -351,6 +465,12 @@ def _apply_diversity_constraints(candidates: list[dict], deck_size: int = 50) ->
     max_per_letter = max(3, deck_size // 10)
     max_per_origin = max(5, deck_size // 5)
     max_per_style = max(deck_size // 3, 10)
+
+    # Relax constraints for sparse pools (Requirement 9.2)
+    if relaxed:
+        max_per_letter *= 2
+        max_per_origin *= 2
+        max_per_style *= 2
 
     for candidate in candidates:
         if len(selected) >= deck_size:
@@ -406,13 +526,27 @@ def _persist_deck(
     candidates: list[dict],
     mode: str,
     profile: dict,
+    quality_metrics: dict | None = None,
 ) -> RecommendationDeck:
-    """Persist the generated deck and its items to the database."""
+    """Persist the generated deck and its items to the database.
+
+    Args:
+        couple: The Couple instance.
+        candidates: Final ranked candidates to persist as deck items.
+        mode: The deck generation mode.
+        profile: The retrieval profile dict (couple preferences).
+        quality_metrics: Optional dict of quality metrics to merge into retrieval_profile_json.
+    """
+    # Merge quality metrics into the retrieval profile
+    retrieval_profile = {**profile}
+    if quality_metrics:
+        retrieval_profile.update(quality_metrics)
+
     # Create the deck
     deck = RecommendationDeck.objects.create(
         couple=couple,
         mode=mode,
-        retrieval_profile_json=profile,
+        retrieval_profile_json=retrieval_profile,
         expires_at=timezone.now() + timezone.timedelta(days=7),
     )
 

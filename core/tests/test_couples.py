@@ -2,13 +2,15 @@
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 
-from core.models import CoupleStatus
+from core.models import Couple, CoupleStatus, OnboardingResponse
 from core.services.couples import (
     CoupleExistsError,
     connect_pending_invite,
     create_couple,
     get_active_couple,
+    get_couple_for_user,
     has_active_couple,
 )
 
@@ -187,3 +189,91 @@ class TestGetActiveCouple:
         """Returns None when user has no active couple."""
         result = get_active_couple(user_a)
         assert result is None
+
+
+class TestGetCoupleForUser:
+    """Tests for get_couple_for_user ordering."""
+
+    def test_prefers_active_couple_over_pending(self, user_a, user_b):
+        """Active couples are preferred over pending records for the same user."""
+        pending = Couple.objects.create(
+            user_a=user_a,
+            status=CoupleStatus.PENDING,
+            invite_email="pending@example.com",
+        )
+        active = Couple.objects.create(
+            user_a=user_b,
+            user_b=user_a,
+            status=CoupleStatus.ACTIVE,
+            invite_email=user_a.email,
+        )
+
+        result = get_couple_for_user(user_a)
+
+        assert result is not None
+        assert result.id == active.id
+        assert result.id != pending.id
+
+
+class TestModelConstraints:
+    """Database constraint tests for couples and onboarding responses."""
+
+    def test_couple_users_must_differ(self, user_a):
+        """A couple cannot reference the same user twice."""
+        with pytest.raises(IntegrityError):
+            with transaction.atomic():
+                Couple.objects.create(
+                    user_a=user_a,
+                    user_b=user_a,
+                    status=CoupleStatus.ACTIVE,
+                    invite_email=user_a.email,
+                )
+
+    def test_single_solo_onboarding_response_per_user(self, user_a):
+        """Only one solo onboarding response can exist per user."""
+        OnboardingResponse.objects.create(
+            user=user_a,
+            couple=None,
+            preferred_name_backgrounds=["German"],
+            preferred_name_age="balanced",
+            baby_gender_preference="boy",
+            preferred_name_length="any",
+            historical_importance="medium",
+        )
+
+        with pytest.raises(IntegrityError):
+            with transaction.atomic():
+                OnboardingResponse.objects.create(
+                    user=user_a,
+                    couple=None,
+                    preferred_name_backgrounds=["Spanish"],
+                    preferred_name_age="balanced",
+                    baby_gender_preference="boy",
+                    preferred_name_length="any",
+                    historical_importance="medium",
+                )
+
+    def test_single_onboarding_response_per_user_and_couple(self, user_a, user_b):
+        """Only one onboarding response can exist for a user within a couple."""
+        couple = create_couple(user_a, user_b.email)
+        OnboardingResponse.objects.create(
+            user=user_a,
+            couple=couple,
+            preferred_name_backgrounds=["German"],
+            preferred_name_age="balanced",
+            baby_gender_preference="boy",
+            preferred_name_length="any",
+            historical_importance="medium",
+        )
+
+        with pytest.raises(IntegrityError):
+            with transaction.atomic():
+                OnboardingResponse.objects.create(
+                    user=user_a,
+                    couple=couple,
+                    preferred_name_backgrounds=["Spanish"],
+                    preferred_name_age="balanced",
+                    baby_gender_preference="boy",
+                    preferred_name_length="any",
+                    historical_importance="medium",
+                )

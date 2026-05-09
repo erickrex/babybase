@@ -55,18 +55,24 @@ function renderWithRouter(initialRoute: string) {
   );
 }
 
+function makeContextValue(overrides: Partial<ReturnType<typeof mockedUseCouple>> = {}) {
+  return {
+    coupleState: {
+      hasCouple: false,
+      couple: null,
+      partner: null,
+      onboardingComplete: { user: false, partner: false },
+    },
+    isLoading: false,
+    refresh: vi.fn(),
+    syncAfterMutation: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe('OnboardingGuard', () => {
   it('shows loading spinner when couple data is loading', () => {
-    mockedUseCouple.mockReturnValue({
-      coupleState: {
-        hasCouple: false,
-        couple: null,
-        partner: null,
-        onboardingComplete: { user: false, partner: false },
-      },
-      isLoading: true,
-      refresh: vi.fn(),
-    });
+    mockedUseCouple.mockReturnValue(makeContextValue({ isLoading: true }));
 
     const { container } = renderWithRouter('/deck');
     // Should show spinner, not content or redirect targets
@@ -76,16 +82,7 @@ describe('OnboardingGuard', () => {
   });
 
   it('redirects to /onboarding/partner when user has no couple', () => {
-    mockedUseCouple.mockReturnValue({
-      coupleState: {
-        hasCouple: false,
-        couple: null,
-        partner: null,
-        onboardingComplete: { user: false, partner: false },
-      },
-      isLoading: false,
-      refresh: vi.fn(),
-    });
+    mockedUseCouple.mockReturnValue(makeContextValue());
 
     renderWithRouter('/deck');
     expect(screen.getByTestId('partner-page')).toBeInTheDocument();
@@ -93,16 +90,14 @@ describe('OnboardingGuard', () => {
   });
 
   it('redirects to /onboarding/preferences when user has couple but incomplete preferences', () => {
-    mockedUseCouple.mockReturnValue({
+    mockedUseCouple.mockReturnValue(makeContextValue({
       coupleState: {
         hasCouple: true,
         couple: { id: '1', status: 'active', residence_country: null, created_at: '' },
         partner: { id: '2', email: 'partner@test.com', first_name: 'Partner', role_in_pregnancy: 'other' },
         onboardingComplete: { user: false, partner: false },
       },
-      isLoading: false,
-      refresh: vi.fn(),
-    });
+    }));
 
     renderWithRouter('/deck');
     expect(screen.getByTestId('preferences-page')).toBeInTheDocument();
@@ -110,16 +105,14 @@ describe('OnboardingGuard', () => {
   });
 
   it('renders children when onboarding is complete', () => {
-    mockedUseCouple.mockReturnValue({
+    mockedUseCouple.mockReturnValue(makeContextValue({
       coupleState: {
         hasCouple: true,
         couple: { id: '1', status: 'active', residence_country: 'US', created_at: '' },
         partner: { id: '2', email: 'partner@test.com', first_name: 'Partner', role_in_pregnancy: 'other' },
         onboardingComplete: { user: true, partner: true },
       },
-      isLoading: false,
-      refresh: vi.fn(),
-    });
+    }));
 
     renderWithRouter('/deck');
     expect(screen.getByTestId('deck-content')).toBeInTheDocument();
@@ -128,16 +121,7 @@ describe('OnboardingGuard', () => {
   });
 
   it('redirects /matches to /onboarding/partner when no couple', () => {
-    mockedUseCouple.mockReturnValue({
-      coupleState: {
-        hasCouple: false,
-        couple: null,
-        partner: null,
-        onboardingComplete: { user: false, partner: false },
-      },
-      isLoading: false,
-      refresh: vi.fn(),
-    });
+    mockedUseCouple.mockReturnValue(makeContextValue());
 
     renderWithRouter('/matches');
     expect(screen.getByTestId('partner-page')).toBeInTheDocument();
@@ -145,16 +129,14 @@ describe('OnboardingGuard', () => {
   });
 
   it('redirects /shortlist to /onboarding/preferences when couple exists but no prefs', () => {
-    mockedUseCouple.mockReturnValue({
+    mockedUseCouple.mockReturnValue(makeContextValue({
       coupleState: {
         hasCouple: true,
         couple: { id: '1', status: 'active', residence_country: null, created_at: '' },
         partner: { id: '2', email: 'partner@test.com', first_name: 'Partner', role_in_pregnancy: 'other' },
         onboardingComplete: { user: false, partner: true },
       },
-      isLoading: false,
-      refresh: vi.fn(),
-    });
+    }));
 
     renderWithRouter('/shortlist');
     expect(screen.getByTestId('preferences-page')).toBeInTheDocument();
@@ -162,19 +144,25 @@ describe('OnboardingGuard', () => {
   });
 
   it('redirects /map to /onboarding/partner when no couple', () => {
-    mockedUseCouple.mockReturnValue({
-      coupleState: {
-        hasCouple: false,
-        couple: null,
-        partner: null,
-        onboardingComplete: { user: false, partner: false },
-      },
-      isLoading: false,
-      refresh: vi.fn(),
-    });
+    mockedUseCouple.mockReturnValue(makeContextValue());
 
     renderWithRouter('/map');
     expect(screen.getByTestId('partner-page')).toBeInTheDocument();
     expect(screen.queryByTestId('map-content')).not.toBeInTheDocument();
+  });
+
+  it('redirects to /onboarding/partner when active couple is waiting on partner onboarding', () => {
+    mockedUseCouple.mockReturnValue(makeContextValue({
+      coupleState: {
+        hasCouple: true,
+        couple: { id: '1', status: 'active', residence_country: 'DE', created_at: '' },
+        partner: { id: '2', email: 'partner@test.com', first_name: 'Partner', role_in_pregnancy: 'other' },
+        onboardingComplete: { user: true, partner: false },
+      },
+    }));
+
+    renderWithRouter('/deck');
+    expect(screen.getByTestId('partner-page')).toBeInTheDocument();
+    expect(screen.queryByTestId('deck-content')).not.toBeInTheDocument();
   });
 });

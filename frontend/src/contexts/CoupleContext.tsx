@@ -39,7 +39,8 @@ interface CoupleState {
 interface CoupleContextType {
   coupleState: CoupleState;
   isLoading: boolean;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<CoupleState>;
+  syncAfterMutation: <T>(operation: () => Promise<T>) => Promise<{ result: T; coupleState: CoupleState }>;
 }
 
 const defaultState: CoupleState = {
@@ -59,34 +60,57 @@ export function CoupleProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     if (!isAuthenticated) {
       setCoupleState(defaultState);
-      return;
+      return defaultState;
     }
 
     setIsLoading(true);
     try {
       const response = await api.get('/couples/me/');
       const data = response.data.data;
-      setCoupleState({
+      const nextState = {
         hasCouple: data.has_couple,
         couple: data.couple,
         partner: data.partner,
         onboardingComplete: data.onboarding_complete,
-      });
+      };
+      setCoupleState(nextState);
+      return nextState;
     } catch {
       setCoupleState(defaultState);
+      return defaultState;
     } finally {
       setIsLoading(false);
     }
   }, [isAuthenticated]);
 
+  const syncAfterMutation = useCallback(
+    async <T,>(operation: () => Promise<T>) => {
+      const result = await operation();
+      const nextCoupleState = await refresh();
+      return { result, coupleState: nextCoupleState };
+    },
+    [refresh]
+  );
+
   useEffect(() => {
-    queueMicrotask(() => {
-      void refresh();
-    });
+    let cancelled = false;
+
+    const load = async () => {
+      await Promise.resolve();
+      if (!cancelled) {
+        await refresh();
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
   }, [refresh]);
 
   return (
-    <CoupleContext.Provider value={{ coupleState, isLoading, refresh }}>
+    <CoupleContext.Provider value={{ coupleState, isLoading, refresh, syncAfterMutation }}>
       {children}
     </CoupleContext.Provider>
   );

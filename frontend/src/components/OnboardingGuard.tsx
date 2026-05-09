@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
  */
 export default function OnboardingGuard({ children }: { children: ReactNode }) {
   const { coupleState, isLoading } = useCouple();
+  const coupleStatus = coupleState.couple?.status;
 
   if (isLoading) {
     return (
@@ -21,7 +22,11 @@ export default function OnboardingGuard({ children }: { children: ReactNode }) {
     return <Navigate to="/onboarding/partner" replace />;
   }
 
-  if (coupleState.couple?.status !== 'active') {
+  if (coupleStatus === 'pending') {
+    return <Navigate to="/onboarding/partner" replace />;
+  }
+
+  if (coupleStatus !== 'active') {
     return <Navigate to="/onboarding/partner" replace />;
   }
 

@@ -1,12 +1,20 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../../services/api';
+import { useCouple } from '../../contexts/CoupleContext';
 
 export default function PartnerInvitePage() {
   const navigate = useNavigate();
+  const { coupleState, isLoading: isCoupleLoading, syncAfterMutation } = useCouple();
   const [partnerEmail, setPartnerEmail] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  const isPendingInvite = coupleState.couple?.status === 'pending';
+  const isWaitingForPartner =
+    coupleState.couple?.status === 'active' &&
+    coupleState.onboardingComplete.user &&
+    !coupleState.onboardingComplete.partner;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,9 +27,11 @@ export default function PartnerInvitePage() {
 
     setIsLoading(true);
     try {
-      await api.post('/couples/invite/', {
-        partner_email: partnerEmail.trim(),
-      });
+      await syncAfterMutation(() =>
+        api.post('/couples/invite/', {
+          partner_email: partnerEmail.trim(),
+        })
+      );
       navigate('/onboarding/preferences');
     } catch (err: unknown) {
       const error = err as { response?: { data?: { message?: string } } };
@@ -35,6 +45,41 @@ export default function PartnerInvitePage() {
   const handleSkip = () => {
     navigate('/onboarding/preferences');
   };
+
+  if (isCoupleLoading) {
+    return (
+      <div className="portrait-container min-h-screen flex flex-col items-center justify-center px-6">
+        <div className="w-10 h-10 border-3 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (isPendingInvite || isWaitingForPartner) {
+    const waitingTitle = isPendingInvite ? 'Invite Sent' : 'Waiting for Your Partner';
+    const waitingBody = isPendingInvite
+      ? 'Your invite is pending. You can finish your preferences while your partner signs up.'
+      : 'You are all set. Once your partner finishes onboarding, the swipe deck will unlock.';
+
+    return (
+      <div className="portrait-container min-h-screen flex flex-col items-center justify-center px-6">
+        <div className="w-full max-w-md text-center">
+          <span className="text-5xl mb-4 block">{isPendingInvite ? '📨' : '⏳'}</span>
+          <h1 className="text-3xl font-bold text-text mb-2">{waitingTitle}</h1>
+          <p className="text-base text-text-secondary mb-8">{waitingBody}</p>
+
+          {isPendingInvite && !coupleState.onboardingComplete.user && (
+            <button
+              type="button"
+              onClick={() => navigate('/onboarding/preferences')}
+              className="w-full rounded-xl bg-primary px-6 py-4 text-base font-semibold text-white shadow-card hover:bg-primary-dark transition-colors"
+            >
+              Continue to Preferences
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="portrait-container min-h-screen flex flex-col items-center justify-center px-6">

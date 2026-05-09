@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import type { NameCardData } from '../components/swipe/SwipeCard';
 
@@ -57,10 +57,6 @@ export function useDeck(mode: string = 'best_match') {
     tasteDrift: null,
   });
 
-  const prefetchingRef = useRef(false);
-  const hasPrefetchedRef = useRef(false);
-  const nextCardsRef = useRef<NameCardData[]>([]);
-
   // Load deck on mount
   const loadDeck = useCallback(async () => {
     setState((prev) => ({ ...prev, isLoading: true, error: null }));
@@ -87,59 +83,34 @@ export function useDeck(mode: string = 'best_match') {
   }, [mode]);
 
   useEffect(() => {
-    queueMicrotask(() => {
-      void loadDeck();
-    });
+    let cancelled = false;
+
+    const load = async () => {
+      await Promise.resolve();
+      if (!cancelled) {
+        await loadDeck();
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
   }, [loadDeck]);
-
-  // Prefetch next deck when 5 cards remain
-  useEffect(() => {
-    const remaining = state.cards.length - state.currentIndex;
-    if (remaining <= 5 && remaining > 0 && !state.isExhausted && !hasPrefetchedRef.current && !prefetchingRef.current) {
-      prefetchingRef.current = true;
-      hasPrefetchedRef.current = true;
-      api
-        .post('/recommendations/deck/', { mode })
-        .then((res) => {
-          const items: NameCardData[] = res.data.data.items.map(mapDeckItem);
-          nextCardsRef.current = items;
-        })
-        .catch(() => {
-          // Silently fail prefetch
-        })
-        .finally(() => {
-          prefetchingRef.current = false;
-        });
-    }
-  }, [state.currentIndex, state.cards.length, state.isExhausted, mode]);
-
-  // Append prefetched cards when current deck is exhausted
-  useEffect(() => {
-    if (
-      state.currentIndex >= state.cards.length &&
-      nextCardsRef.current.length > 0
-    ) {
-      setState((prev) => ({
-        ...prev,
-        cards: [...prev.cards, ...nextCardsRef.current],
-        isExhausted: false,
-      }));
-      nextCardsRef.current = [];
-      hasPrefetchedRef.current = false;
-    } else if (
-      state.currentIndex >= state.cards.length &&
-      nextCardsRef.current.length === 0 &&
-      !state.isLoading
-    ) {
-      setState((prev) => ({ ...prev, isExhausted: true }));
-    }
-  }, [state.currentIndex, state.cards.length, state.isLoading]);
 
   // Swipe action — optimistic update
   const swipe = useCallback(
     async (nameId: string, action: 'like' | 'dislike' | 'maybe'): Promise<SwipeResult> => {
       // Optimistic: advance card immediately
-      setState((prev) => ({ ...prev, currentIndex: prev.currentIndex + 1 }));
+      setState((prev) => {
+        const nextIndex = prev.currentIndex + 1;
+        return {
+          ...prev,
+          currentIndex: nextIndex,
+          isExhausted: nextIndex >= prev.cards.length,
+        };
+      });
 
       try {
         const res = await api.post('/swipes/', { name_id: nameId, action });
@@ -157,7 +128,7 @@ export function useDeck(mode: string = 'best_match') {
 
   // Refresh deck (when exhausted)
   const refreshDeck = useCallback(() => {
-    loadDeck();
+    void loadDeck();
   }, [loadDeck]);
 
   const currentCard = state.cards[state.currentIndex] || null;

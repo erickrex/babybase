@@ -7,15 +7,27 @@ Uses python-decouple for environment-based configuration.
 from pathlib import Path
 
 from decouple import Csv, config
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+APP_ENV = config("APP_ENV", default="development").lower()
+LOCAL_ENVIRONMENTS = {"development", "dev", "local", "test"}
+IS_LOCAL_ENV = APP_ENV in LOCAL_ENVIRONMENTS
+
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = config("SECRET_KEY", default="django-insecure-dev-key-change-in-production")
+SECRET_KEY = config(
+    "SECRET_KEY",
+    default="django-insecure-dev-key-change-in-production" if IS_LOCAL_ENV else "",
+)
+if not SECRET_KEY:
+    raise ImproperlyConfigured("SECRET_KEY must be set outside local development.")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config("DEBUG", default=True, cast=bool)
+DEBUG = config("DEBUG", default=IS_LOCAL_ENV, cast=bool)
+if not IS_LOCAL_ENV and DEBUG:
+    raise ImproperlyConfigured("DEBUG must be False outside local development.")
 
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv())
 
@@ -123,7 +135,9 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
-    "DEFAULT_THROTTLE_CLASSES": [],
+    "DEFAULT_THROTTLE_CLASSES": [
+        "core.throttles.GeneralAPIRateThrottle",
+    ],
     "DEFAULT_THROTTLE_RATES": {
         "login": "5/15min",
         "general": "1000/hour",

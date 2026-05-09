@@ -4,6 +4,7 @@ import uuid
 
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
+from django.db.models import Q
 
 
 class BaseModel(models.Model):
@@ -125,6 +126,25 @@ class Couple(BaseModel):
                 fields=["user_a", "user_b"],
                 name="unique_couple_pair",
             ),
+            models.CheckConstraint(
+                condition=~models.Q(user_a=models.F("user_b")),
+                name="couple_users_must_differ",
+            ),
+            models.UniqueConstraint(
+                fields=["user_a"],
+                condition=Q(status=CoupleStatus.ACTIVE),
+                name="unique_active_couple_for_user_a",
+            ),
+            models.UniqueConstraint(
+                fields=["user_b"],
+                condition=Q(status=CoupleStatus.ACTIVE, user_b__isnull=False),
+                name="unique_active_couple_for_user_b",
+            ),
+            models.UniqueConstraint(
+                fields=["user_a"],
+                condition=Q(status=CoupleStatus.PENDING),
+                name="unique_pending_invite_per_user_a",
+            ),
         ]
         indexes = [
             models.Index(fields=["status"], name="idx_couple_status"),
@@ -139,7 +159,10 @@ class OnboardingResponse(BaseModel):
     """Stores a user's onboarding preference answers for their couple."""
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="onboarding_responses")
-    couple = models.ForeignKey(Couple, on_delete=models.CASCADE, related_name="onboarding_responses")
+    couple = models.ForeignKey(
+        Couple, on_delete=models.CASCADE, related_name="onboarding_responses",
+        null=True, blank=True,
+    )
     preferred_name_backgrounds = models.JSONField(default=list)
     preferred_name_age = models.CharField(
         max_length=10,
@@ -160,6 +183,18 @@ class OnboardingResponse(BaseModel):
 
     class Meta:
         db_table = "core_onboarding_response"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "couple"],
+                condition=Q(couple__isnull=False),
+                name="unique_onboarding_response_per_user_couple",
+            ),
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=Q(couple__isnull=True),
+                name="unique_solo_onboarding_response_per_user",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"OnboardingResponse({self.user.email})"
@@ -359,3 +394,25 @@ class MutualMatch(BaseModel):
 
     def __str__(self) -> str:
         return f"Match({self.couple} ↔ {self.name.canonical_name})"
+
+
+class UserTasteVector(BaseModel):
+    """Per-user taste vector with quality metrics for Phase D eligibility."""
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="taste_vector")
+    embedding = models.JSONField(default=list)  # list[float], 1536 dimensions
+    swipe_count = models.IntegerField(default=0)
+    like_rate = models.FloatField(default=0.0)  # likes / total_swipes
+    vector_variance = models.FloatField(default=0.0)  # avg squared distance to centroid
+    confidence_score = models.FloatField(default=0.0)  # composite [0.0, 1.0]
+    last_updated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "core_user_taste_vector"
+        indexes = [
+            models.Index(fields=["confidence_score"], name="idx_taste_vector_confidence"),
+            models.Index(fields=["last_updated_at"], name="idx_taste_vector_updated"),
+        ]
+
+    def __str__(self):
+        return f"TasteVector({self.user.email}, confidence={self.confidence_score:.2f})"

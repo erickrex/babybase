@@ -60,9 +60,22 @@ def generate_deck_view(request: Request) -> Response:
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Validate both partners have completed onboarding
-    onboarding_count = OnboardingResponse.objects.filter(couple=couple).count()
-    if onboarding_count < 2:
+    if couple.user_b is None:
+        return Response(
+            {
+                "status": "error",
+                "message": "Both partners must complete onboarding before generating a deck.",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    onboarded_user_ids = set(
+        OnboardingResponse.objects.filter(couple=couple, user_id__in=[couple.user_a_id, couple.user_b_id])
+        .values_list("user_id", flat=True)
+        .distinct()
+    )
+    required_user_ids = {couple.user_a_id, couple.user_b_id}
+    if onboarded_user_ids != required_user_ids:
         return Response(
             {
                 "status": "error",

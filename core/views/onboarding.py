@@ -27,18 +27,12 @@ def onboarding_preferences_view(request: Request) -> Response:
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # User must be in a couple to save preferences
+    # Couple is optional — solo users can onboard without one
     couple = get_couple_for_user(request.user)
-    if not couple:
-        logger.warning("Onboarding attempted without couple: user=%s", request.user.email)
-        return Response(
-            {"status": "error", "message": "You must be in a couple to save preferences."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
 
     response = save_preferences(request.user, couple, serializer.validated_data)
 
-    logger.info("Onboarding completed: user=%s couple=%s", request.user.email, couple.id)
+    logger.info("Onboarding completed: user=%s couple=%s", request.user.email, couple.id if couple else None)
     return Response(
         {
             "status": "success",
@@ -49,7 +43,7 @@ def onboarding_preferences_view(request: Request) -> Response:
                 "baby_gender_preference": response.baby_gender_preference,
                 "preferred_name_length": response.preferred_name_length,
                 "historical_importance": response.historical_importance,
-                "residence_country": couple.residence_country,
+                "residence_country": couple.residence_country if couple else None,
             },
         },
         status=status.HTTP_201_CREATED,

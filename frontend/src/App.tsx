@@ -74,7 +74,9 @@ function ProfileTabPage() {
         <p className="text-sm text-text-muted mt-1">{user?.first_name || 'No name set'}</p>
       </div>
       <button
-        onClick={logout}
+        onClick={() => {
+          void logout();
+        }}
         className="mt-6 w-full py-2.5 rounded-xl border border-border text-text-secondary font-medium hover:bg-bg-muted transition-colors"
       >
         Sign Out

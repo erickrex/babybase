@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../../services/api';
+import { useCouple } from '../../contexts/CoupleContext';
 
 interface Question {
   key: string;
@@ -83,6 +84,7 @@ const QUESTIONS: Question[] = [
 
 export default function PreferencesPage() {
   const navigate = useNavigate();
+  const { syncAfterMutation } = useCouple();
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [error, setError] = useState('');
@@ -119,8 +121,14 @@ export default function PreferencesPage() {
     if (isLastStep) {
       setIsLoading(true);
       try {
-        await api.post('/onboarding/preferences/', answers);
-        navigate('/deck');
+        const { coupleState } = await syncAfterMutation(() =>
+          api.post('/onboarding/preferences/', answers)
+        );
+        const canEnterApp =
+          coupleState.couple?.status === 'active' &&
+          coupleState.onboardingComplete.user &&
+          coupleState.onboardingComplete.partner;
+        navigate(canEnterApp ? '/deck' : '/onboarding/partner');
       } catch (err: unknown) {
         const error = err as { response?: { data?: { message?: string } } };
         const message = error.response?.data?.message || 'Failed to save preferences.';

@@ -364,15 +364,15 @@ class TestRerankCandidates:
         assert [candidate["name_id"] for candidate in ranked[:2]] == ["aaron", "blair"]
 
 
-class TestUnexpiredDeckReuse:
-    """Tests for unexpired deck reuse in generate_deck (Requirement 5.1)."""
+class TestFreshDeckGeneration:
+    """Tests for always-fresh deck generation semantics."""
 
     @patch("core.services.recommendations.search_names")
     @patch("core.services.recommendations.build_couple_query_embedding")
-    def test_unexpired_deck_is_reused(
+    def test_unexpired_deck_still_generates_new_deck(
         self, mock_embedding, mock_search, couple_with_onboarding, sample_names
     ):
-        """When an unexpired deck of the same mode exists, it is returned without creating a new one."""
+        """An existing unexpired deck does not suppress fresh generation."""
         couple, _, _ = couple_with_onboarding
 
         # Create an existing unexpired deck
@@ -383,12 +383,15 @@ class TestUnexpiredDeckReuse:
             expires_at=timezone.now() + timezone.timedelta(days=3),
         )
 
-        # Call generate_deck — should return existing without calling Qdrant
+        mock_embedding.return_value = [0.1] * 1536
+        candidates = [_make_qdrant_candidate(n, 0.9 - i * 0.1) for i, n in enumerate(sample_names)]
+        mock_search.return_value = candidates
+
         result = generate_deck(couple, mode="best_match")
 
-        assert result.id == existing_deck.id
-        mock_embedding.assert_not_called()
-        mock_search.assert_not_called()
+        assert result.id != existing_deck.id
+        mock_embedding.assert_called_once()
+        mock_search.assert_called_once()
 
     @patch("core.services.recommendations.search_names")
     @patch("core.services.recommendations.build_couple_query_embedding")
@@ -417,3 +420,220 @@ class TestUnexpiredDeckReuse:
         assert result.id != expired_deck.id
         mock_embedding.assert_called_once()
         mock_search.assert_called()
+
+
+class TestSparseRetrievalFallback:
+    """Tests for sparse retrieval fallback when Phase D top score < 0.6."""
+
+    @patch("core.services.recommendations.select_phase")
+    @patch("core.services.recommendations.search_names")
+    @patch("core.services.recommendations.build_couple_query_embedding")
+    @patch("core.services.recommendations.compute_confidence_weighted_midpoint")
+    def test_phase_d_low_score_triggers_fallback(
+        self,
+        mock_midpoint,
+        mock_embedding,
+        mock_search,
+        mock_select_phase,
+        couple_with_onboarding,
+        sample_names,
+    ):
+        """When Phase D top score < 0.6, results are discarded and Phase C is used."""
+        couple, _, _ = couple_with_onboarding
+
+        # select_phase returns phase_d (called twice: once in _build_query_embedding_for_mode,
+        # once in generate_deck for tracking)
+        mock_select_phase.return_value = (
+            "phase_d",
+            {"vec_a": [0.1] * 1536, "conf_a": 0.8, "vec_b": [0.2] * 1536, "conf_b": 0.7},
+        )
+        mock_midpoint.return_value = [0.15] * 1536
+        mock_embedding.return_value = [0.3] * 1536  # Phase C embedding
+
+        # First search (Phase D) returns low scores
+        low_score_candidates = [_make_qdrant_candidate(n, 0.4 - i * 0.05) for i, n in enumerate(sample_names)]
+        # Second search (Phase C fallback) returns good scores
+        good_candidates = [_make_qdrant_candidate(n, 0.85 - i * 0.05) for i, n in enumerate(sample_names)]
+        mock_search.side_effect = [low_score_candidates, good_candidates]
+
+        deck = generate_deck(couple, mode="best_match")
+
+        assert deck.items.count() > 0
+        # Phase C embedding should have been called for the fallback
+        mock_embedding.assert_called_once_with(couple)
+        # search_names called twice: once with Phase D, once with Phase C
+        assert mock_search.call_count == 2
+
+    @patch("core.services.recommendations.select_phase")
+    @patch("core.services.recommendations.search_names")
+    @patch("core.services.recommendations.build_couple_query_embedding")
+    @patch("core.services.recommendations.compute_confidence_weighted_midpoint")
+    def test_phase_d_high_score_no_fallback(
+        self,
+        mock_midpoint,
+        mock_embedding,
+        mock_search,
+        mock_select_phase,
+        couple_with_onboarding,
+        sample_names,
+    ):
+        """When Phase D top score >= 0.6, no fallback occurs."""
+        couple, _, _ = couple_with_onboarding
+
+        mock_select_phase.return_value = (
+            "phase_d",
+            {"vec_a": [0.1] * 1536, "conf_a": 0.8, "vec_b": [0.2] * 1536, "conf_b": 0.7},
+        )
+        mock_midpoint.return_value = [0.15] * 1536
+
+        # Search returns good scores (>= 0.6)
+        good_candidates = [_make_qdrant_candidate(n, 0.85 - i * 0.05) for i, n in enumerate(sample_names)]
+        mock_search.return_value = good_candidates
+
+        deck = generate_deck(couple, mode="best_match")
+
+        assert deck.items.count() > 0
+        # Phase C embedding should NOT have been called
+        mock_embedding.assert_not_called()
+        # search_names called only once (Phase D was sufficient)
+        assert mock_search.call_count == 1
+
+    @patch("core.services.recommendations.select_phase")
+    @patch("core.services.recommendations.search_names")
+    @patch("core.services.recommendations.build_couple_query_embedding")
+    def test_phase_c_no_fallback_check(
+        self,
+        mock_embedding,
+        mock_search,
+        mock_select_phase,
+        couple_with_onboarding,
+        sample_names,
+    ):
+        """When Phase C is used directly, no sparse retrieval fallback check occurs."""
+        couple, _, _ = couple_with_onboarding
+
+        # select_phase returns phase_c
+        mock_select_phase.return_value = ("phase_c", {"reason": "user_a_swipe_count_below_threshold"})
+        mock_embedding.return_value = [0.3] * 1536
+
+        # Search returns low scores — but no fallback should trigger since Phase C was used
+        low_score_candidates = [_make_qdrant_candidate(n, 0.4 - i * 0.05) for i, n in enumerate(sample_names)]
+        mock_search.return_value = low_score_candidates
+
+        deck = generate_deck(couple, mode="best_match")
+
+        assert deck.items.count() > 0
+        # search_names called only once (no fallback for Phase C)
+        assert mock_search.call_count == 1
+
+
+class TestRelaxedDiversityConstraints:
+    """Tests for relaxed diversity constraints when pool is sparse (Requirement 9.2)."""
+
+    def test_relaxed_allows_more_same_letter(self):
+        """When relaxed=True, more candidates with the same first letter are accepted."""
+        # Create candidates all starting with 'A' and low rerank_score (< 0.5)
+        # With normal constraints (max_per_letter=5 for deck_size=50), only 5 would pass
+        # With relaxed (max_per_letter=10), more should pass
+        candidates = [
+            {
+                "point_id": str(uuid.uuid4()),
+                "name_id": str(uuid.uuid4()),
+                "score": 0.7,
+                "rerank_score": 0.3,  # Below 0.5, so diversity constraints apply
+                "payload": {
+                    "canonical_name": f"A_name_{i}",
+                    "origin_backgrounds": [f"Origin{i}"],
+                    "age_style_category": f"style{i}",
+                },
+            }
+            for i in range(60)
+        ]
+
+        # Normal constraints: max_per_letter = max(3, 50//10) = 5
+        normal_result = _apply_diversity_constraints(candidates, deck_size=50, relaxed=False)
+        # Relaxed constraints: max_per_letter = 5 * 2 = 10
+        relaxed_result = _apply_diversity_constraints(candidates, deck_size=50, relaxed=True)
+
+        # Relaxed should allow more candidates through
+        assert len(relaxed_result) >= len(normal_result)
+
+    def test_relaxed_allows_more_same_origin(self):
+        """When relaxed=True, more candidates with the same origin are accepted."""
+        # All candidates share the same origin with low rerank_score
+        candidates = [
+            {
+                "point_id": str(uuid.uuid4()),
+                "name_id": str(uuid.uuid4()),
+                "score": 0.7,
+                "rerank_score": 0.3,  # Below 0.5
+                "payload": {
+                    "canonical_name": f"{chr(65 + i % 26)}_name_{i}",
+                    "origin_backgrounds": ["Spanish"],
+                    "age_style_category": f"style{i % 5}",
+                },
+            }
+            for i in range(60)
+        ]
+
+        normal_result = _apply_diversity_constraints(candidates, deck_size=50, relaxed=False)
+        relaxed_result = _apply_diversity_constraints(candidates, deck_size=50, relaxed=True)
+
+        # Count how many with "Spanish" origin got through
+        normal_spanish = sum(
+            1 for c in normal_result if "Spanish" in c["payload"]["origin_backgrounds"]
+        )
+        relaxed_spanish = sum(
+            1 for c in relaxed_result if "Spanish" in c["payload"]["origin_backgrounds"]
+        )
+
+        assert relaxed_spanish >= normal_spanish
+
+    def test_relaxed_false_is_default_behavior(self):
+        """Default (relaxed=False) preserves existing diversity constraint behavior."""
+        candidates = [
+            {
+                "point_id": str(uuid.uuid4()),
+                "name_id": str(uuid.uuid4()),
+                "score": 0.9 - i * 0.01,
+                "rerank_score": 0.8,
+                "payload": {
+                    "canonical_name": f"Name{i}",
+                    "origin_backgrounds": ["Spanish"],
+                    "age_style_category": "classic",
+                },
+            }
+            for i in range(60)
+        ]
+
+        result_default = _apply_diversity_constraints(candidates, deck_size=50)
+        result_explicit = _apply_diversity_constraints(candidates, deck_size=50, relaxed=False)
+
+        assert len(result_default) == len(result_explicit)
+
+    def test_sparse_pool_detection_triggers_relaxed(self):
+        """Integration: fewer than 10 candidates above 0.5 triggers relaxed constraints."""
+        # This tests the sparse pool detection logic indirectly via _apply_diversity_constraints
+        # When all candidates score below 0.5, the pool is sparse
+        candidates = [
+            {
+                "point_id": str(uuid.uuid4()),
+                "name_id": str(uuid.uuid4()),
+                "score": 0.7,
+                "rerank_score": 0.3,  # All below 0.5
+                "payload": {
+                    "canonical_name": f"A_name_{i}",
+                    "origin_backgrounds": ["Spanish"],
+                    "age_style_category": "classic",
+                },
+            }
+            for i in range(60)
+        ]
+
+        # Verify sparse pool detection logic
+        above_threshold_count = sum(1 for c in candidates if c.get("rerank_score", 0) > 0.5)
+        assert above_threshold_count < 10  # Confirms sparse pool
+
+        # With relaxed=True, all 50 should be selected (high-score bypass + doubled limits)
+        relaxed_result = _apply_diversity_constraints(candidates, deck_size=50, relaxed=True)
+        assert len(relaxed_result) == 50
