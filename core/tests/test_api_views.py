@@ -248,3 +248,55 @@ class TestGenerateDeckView:
 
         assert response.status_code == 400
         assert "Both partners must complete onboarding" in response.data["message"]
+
+    @patch("core.services.recommendations.search_names")
+    @patch("core.services.recommendations.build_couple_query_embedding")
+    def test_solo_user_can_generate_deck(self, mock_embedding, mock_search, db):
+        """A solo user who completed onboarding can generate a deck without a partner."""
+        user = User.objects.create_user(email="solo-deck@test.com", password="testpass123")
+        client = api_client_for(user)
+
+        # Complete onboarding solo (no couple)
+        OnboardingResponse.objects.create(
+            user=user,
+            couple=None,
+            preferred_name_backgrounds=["English"],
+            preferred_name_age="balanced",
+            baby_gender_preference="girl",
+            preferred_name_length="any",
+            historical_importance="low",
+        )
+
+        mock_embedding.return_value = [0.1] * 1024
+        name = Name.objects.create(
+            canonical_name="SoloDeckName",
+            display_name="Solo Deck Name",
+            gender_usage=["girl"],
+            origin_backgrounds=["English"],
+            languages=["en"],
+            scripts=["Latin"],
+            variants=[],
+            length_category="short",
+            age_style_category="classic",
+            historical_significance_score=0.5,
+            semantic_summary="Solo deck test name.",
+            active=True,
+        )
+        mock_search.return_value = [_make_candidate(name, 0.85)]
+
+        response = client.post("/api/v1/recommendations/deck/", {"mode": "best_match"}, format="json")
+
+        assert response.status_code == 201
+        assert response.data["data"]["items"][0]["name"]["display_name"] == "Solo Deck Name"
+        # Verify a solo couple was created
+        assert Couple.objects.filter(user_a=user, user_b=None, status=CoupleStatus.ACTIVE).exists()
+
+    def test_solo_user_without_onboarding_cannot_generate_deck(self, db):
+        """A solo user who has NOT completed onboarding gets a 400."""
+        user = User.objects.create_user(email="solo-no-onboard@test.com", password="testpass123")
+        client = api_client_for(user)
+
+        response = client.post("/api/v1/recommendations/deck/", {"mode": "best_match"}, format="json")
+
+        assert response.status_code == 400
+        assert "complete onboarding" in response.data["message"]
