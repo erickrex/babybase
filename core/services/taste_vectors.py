@@ -28,6 +28,11 @@ def check_trust_thresholds(taste_vector) -> tuple[bool, str | None]:
 
     Returns (True, None) if all pass, or (False, "reason_string") if any fail.
     """
+    from core.services.embeddings import EMBEDDING_DIM
+
+    if len(taste_vector.embedding or []) != EMBEDDING_DIM:
+        return (False, "embedding_dimension_mismatch")
+
     if taste_vector.swipe_count < TRUST_THRESHOLDS["min_swipe_count"]:
         return (False, "swipe_count_below_threshold")
 
@@ -278,8 +283,8 @@ def compute_confidence_score(
     """
     Compute composite confidence score in [0.0, 1.0].
 
-    Stub implementation — returns a basic sigmoid-based score.
-    Task 3.1 will replace this with the full algorithm.
+    Combines swipe volume, like-rate quality, and vector staleness into a
+    conservative trust score used for Phase D eligibility.
 
     Args:
         swipe_count: Total number of swipes.

@@ -36,6 +36,7 @@ from core.services.taste_vectors import (
 )
 
 User = get_user_model()
+FULL_DIM = 1024
 
 
 # ---------------------------------------------------------------------------
@@ -556,7 +557,7 @@ class TestPhaseSelector:
         now = timezone.now()
         UserTasteVector.objects.create(
             user=user_a,
-            embedding=[0.1] * 10,
+            embedding=[0.1] * FULL_DIM,
             swipe_count=30,
             like_rate=0.5,
             vector_variance=0.1,
@@ -565,7 +566,7 @@ class TestPhaseSelector:
         )
         UserTasteVector.objects.create(
             user=user_b,
-            embedding=[0.2] * 10,
+            embedding=[0.2] * FULL_DIM,
             swipe_count=25,
             like_rate=0.4,
             vector_variance=0.2,
@@ -576,9 +577,9 @@ class TestPhaseSelector:
         phase, data = select_phase(couple)
 
         assert phase == "phase_d"
-        assert data["vec_a"] == [0.1] * 10
+        assert data["vec_a"] == [0.1] * FULL_DIM
         assert data["conf_a"] == 0.8
-        assert data["vec_b"] == [0.2] * 10
+        assert data["vec_b"] == [0.2] * FULL_DIM
         assert data["conf_b"] == 0.7
 
     @pytest.mark.django_db
@@ -593,7 +594,7 @@ class TestPhaseSelector:
         now = timezone.now()
         UserTasteVector.objects.create(
             user=user_a,
-            embedding=[0.1] * 10,
+            embedding=[0.1] * FULL_DIM,
             swipe_count=15,  # Below threshold
             like_rate=0.5,
             vector_variance=0.1,
@@ -602,7 +603,7 @@ class TestPhaseSelector:
         )
         UserTasteVector.objects.create(
             user=user_b,
-            embedding=[0.2] * 10,
+            embedding=[0.2] * FULL_DIM,
             swipe_count=30,
             like_rate=0.5,
             vector_variance=0.1,
@@ -628,7 +629,7 @@ class TestPhaseSelector:
         # Only user_a has a taste vector
         UserTasteVector.objects.create(
             user=user_a,
-            embedding=[0.1] * 10,
+            embedding=[0.1] * FULL_DIM,
             swipe_count=30,
             like_rate=0.5,
             vector_variance=0.1,
@@ -653,7 +654,7 @@ class TestPhaseSelector:
         stale_time = timezone.now() - timedelta(days=35)
         UserTasteVector.objects.create(
             user=user_a,
-            embedding=[0.1] * 10,
+            embedding=[0.1] * FULL_DIM,
             swipe_count=30,
             like_rate=0.5,
             vector_variance=0.1,
@@ -662,7 +663,7 @@ class TestPhaseSelector:
         )
         UserTasteVector.objects.create(
             user=user_b,
-            embedding=[0.2] * 10,
+            embedding=[0.2] * FULL_DIM,
             swipe_count=30,
             like_rate=0.5,
             vector_variance=0.1,
@@ -687,7 +688,7 @@ class TestPhaseSelector:
         now = timezone.now()
         UserTasteVector.objects.create(
             user=user_a,
-            embedding=[0.1] * 10,
+            embedding=[0.1] * FULL_DIM,
             swipe_count=30,
             like_rate=0.9,  # Above max threshold
             vector_variance=0.1,
@@ -696,7 +697,7 @@ class TestPhaseSelector:
         )
         UserTasteVector.objects.create(
             user=user_b,
-            embedding=[0.2] * 10,
+            embedding=[0.2] * FULL_DIM,
             swipe_count=30,
             like_rate=0.5,
             vector_variance=0.1,
@@ -708,6 +709,40 @@ class TestPhaseSelector:
 
         assert phase == "phase_c"
         assert "like_rate" in data["reason"]
+
+    @pytest.mark.django_db
+    def test_stale_dimension_vector_phase_c(self):
+        """Non-Nova taste vectors are not trusted for Phase D."""
+        user_a = User.objects.create_user(email="phase_dim_a@test.com", password="testpass123")
+        user_b = User.objects.create_user(email="phase_dim_b@test.com", password="testpass123")
+        couple = Couple.objects.create(
+            user_a=user_a, user_b=user_b, status=CoupleStatus.ACTIVE
+        )
+
+        now = timezone.now()
+        UserTasteVector.objects.create(
+            user=user_a,
+            embedding=[0.1] * 1536,
+            swipe_count=30,
+            like_rate=0.5,
+            vector_variance=0.1,
+            confidence_score=0.8,
+            last_updated_at=now,
+        )
+        UserTasteVector.objects.create(
+            user=user_b,
+            embedding=[0.2] * FULL_DIM,
+            swipe_count=30,
+            like_rate=0.5,
+            vector_variance=0.1,
+            confidence_score=0.8,
+            last_updated_at=now,
+        )
+
+        phase, data = select_phase(couple)
+
+        assert phase == "phase_c"
+        assert "embedding_dimension_mismatch" in data["reason"]
 
 
 class TestMidpointMerger:
@@ -974,7 +1009,7 @@ class TestDeckGenerationPhaseD:
         now = timezone.now()
         UserTasteVector.objects.create(
             user=user_a,
-            embedding=[0.1] * 1536,
+            embedding=[0.1] * 1024,
             swipe_count=40,
             like_rate=0.5,
             vector_variance=0.1,
@@ -983,7 +1018,7 @@ class TestDeckGenerationPhaseD:
         )
         UserTasteVector.objects.create(
             user=user_b,
-            embedding=[0.2] * 1536,
+            embedding=[0.2] * 1024,
             swipe_count=35,
             like_rate=0.4,
             vector_variance=0.15,
@@ -1118,7 +1153,7 @@ class TestDeckGenerationPhaseD:
             for i, name in enumerate(sample_names)
         ]
         mock_search.side_effect = [low_candidates, good_candidates]
-        mock_embedding.return_value = [0.3] * 1536
+        mock_embedding.return_value = [0.3] * 1024
 
         deck = generate_deck(couple, mode="best_match")
 
@@ -1253,7 +1288,7 @@ class TestDeckGenerationPhaseD:
         ]
         mock_search.return_value = candidates
 
-        with patch("core.services.embeddings.generate_embedding", return_value=[0.1] * 1536):
+        with patch("core.services.embeddings.generate_embedding", return_value=[0.1] * 1024):
             deck = generate_deck(couple, mode="best_match")
 
         assert isinstance(deck, RecommendationDeck)
@@ -1328,7 +1363,7 @@ class TestDeckGenerationPhaseD:
         ]
         mock_search.return_value = candidates
 
-        with patch("core.services.embeddings.generate_embedding", return_value=[0.1] * 1536):
+        with patch("core.services.embeddings.generate_embedding", return_value=[0.1] * 1024):
             deck = generate_deck(couple, mode="best_match")
 
         profile = deck.retrieval_profile_json

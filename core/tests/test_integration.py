@@ -217,7 +217,7 @@ class TestPartnerInviteSignupFlow:
 
 
 class TestDeckGenerationPipeline:
-    """Integration test: Full deck generation pipeline (mock Qdrant + OpenAI)."""
+    """Integration test: Full deck generation pipeline (mock Qdrant + Bedrock Nova)."""
 
     @patch("core.services.recommendations.search_names")
     @patch("core.services.recommendations.build_couple_query_embedding")
@@ -234,7 +234,7 @@ class TestDeckGenerationPipeline:
         record_swipe(user_b, couple, str(names_pool[1].id), "dislike")
 
         # Mock embedding
-        mock_embedding.return_value = [0.1] * 1536
+        mock_embedding.return_value = [0.1] * 1024
 
         # Mock Qdrant returns remaining names (not the swiped ones)
         remaining_names = names_pool[2:]  # Skip first two (swiped)

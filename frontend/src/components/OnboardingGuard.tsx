@@ -18,7 +18,11 @@ export default function OnboardingGuard({ children }: { children: ReactNode }) {
     );
   }
 
+  // Solo user who completed onboarding can access the app
   if (!coupleState.hasCouple) {
+    if (coupleState.onboardingComplete.user) {
+      return <>{children}</>;
+    }
     return <Navigate to="/onboarding/partner" replace />;
   }
 

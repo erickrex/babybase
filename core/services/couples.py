@@ -236,11 +236,14 @@ def get_couple_status(user: "User") -> dict:
     couple = get_couple_for_user(user)
 
     if not couple:
+        from core.models import OnboardingResponse
+
+        user_onboarded_solo = OnboardingResponse.objects.filter(user=user, couple=None).exists()
         return {
             "has_couple": False,
             "couple": None,
             "partner": None,
-            "onboarding_complete": {"user": False, "partner": False},
+            "onboarding_complete": {"user": user_onboarded_solo, "partner": False},
         }
 
     # Determine partner

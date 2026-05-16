@@ -158,8 +158,8 @@ QDRANT_URL = config("QDRANT_URL", default="")
 QDRANT_API_KEY = config("QDRANT_API_KEY", default="")
 QDRANT_COLLECTION = config("QDRANT_COLLECTION", default="names_global_v1")
 
-# OpenAI Configuration
-OPENAI_API_KEY = config("OPENAI_API_KEY", default="")
+# AWS Bedrock Configuration
+AWS_BEDROCK_REGION = config("AWS_BEDROCK_REGION", default="us-east-1")
 
 # Logging Configuration
 LOG_LEVEL = config("LOG_LEVEL", default="INFO")

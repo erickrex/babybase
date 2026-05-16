@@ -400,7 +400,7 @@ class UserTasteVector(BaseModel):
     """Per-user taste vector with quality metrics for Phase D eligibility."""
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="taste_vector")
-    embedding = models.JSONField(default=list)  # list[float], 1536 dimensions
+    embedding = models.JSONField(default=list)  # list[float], 1024 dimensions
     swipe_count = models.IntegerField(default=0)
     like_rate = models.FloatField(default=0.0)  # likes / total_swipes
     vector_variance = models.FloatField(default=0.0)  # avg squared distance to centroid

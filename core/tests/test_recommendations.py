@@ -1,4 +1,4 @@
-"""Unit tests for recommendation service (mock Qdrant + OpenAI)."""
+"""Unit tests for recommendation service (mock Qdrant + Bedrock Nova)."""
 
 import uuid
 from types import SimpleNamespace
@@ -122,7 +122,7 @@ class TestGenerateDeck:
         couple, _, _ = couple_with_onboarding
 
         # Mock embedding
-        mock_embedding.return_value = [0.1] * 1536
+        mock_embedding.return_value = [0.1] * 1024
 
         # Mock Qdrant search results
         candidates = [_make_qdrant_candidate(n, 0.9 - i * 0.1) for i, n in enumerate(sample_names)]
@@ -144,7 +144,7 @@ class TestGenerateDeck:
         """Deck generation in bridge_names mode uses bridge centroid."""
         couple, _, _ = couple_with_onboarding
 
-        mock_centroid.return_value = [0.2] * 1536
+        mock_centroid.return_value = [0.2] * 1024
         candidates = [_make_qdrant_candidate(n, 0.85 - i * 0.1) for i, n in enumerate(sample_names)]
         mock_search.return_value = candidates
 
@@ -161,7 +161,7 @@ class TestGenerateDeck:
     ):
         """When strict filters return nothing, relaxed filters are tried."""
         couple, _, _ = couple_with_onboarding
-        mock_embedding.return_value = [0.1] * 1536
+        mock_embedding.return_value = [0.1] * 1024
 
         # First call returns empty, second returns results
         candidates = [_make_qdrant_candidate(n, 0.7) for n in sample_names]
@@ -383,7 +383,7 @@ class TestFreshDeckGeneration:
             expires_at=timezone.now() + timezone.timedelta(days=3),
         )
 
-        mock_embedding.return_value = [0.1] * 1536
+        mock_embedding.return_value = [0.1] * 1024
         candidates = [_make_qdrant_candidate(n, 0.9 - i * 0.1) for i, n in enumerate(sample_names)]
         mock_search.return_value = candidates
 
@@ -410,7 +410,7 @@ class TestFreshDeckGeneration:
         )
 
         # Mock embedding and search for new generation
-        mock_embedding.return_value = [0.1] * 1536
+        mock_embedding.return_value = [0.1] * 1024
         candidates = [_make_qdrant_candidate(n, 0.9 - i * 0.1) for i, n in enumerate(sample_names)]
         mock_search.return_value = candidates
 
@@ -445,10 +445,10 @@ class TestSparseRetrievalFallback:
         # once in generate_deck for tracking)
         mock_select_phase.return_value = (
             "phase_d",
-            {"vec_a": [0.1] * 1536, "conf_a": 0.8, "vec_b": [0.2] * 1536, "conf_b": 0.7},
+            {"vec_a": [0.1] * 1024, "conf_a": 0.8, "vec_b": [0.2] * 1024, "conf_b": 0.7},
         )
-        mock_midpoint.return_value = [0.15] * 1536
-        mock_embedding.return_value = [0.3] * 1536  # Phase C embedding
+        mock_midpoint.return_value = [0.15] * 1024
+        mock_embedding.return_value = [0.3] * 1024  # Phase C embedding
 
         # First search (Phase D) returns low scores
         low_score_candidates = [_make_qdrant_candidate(n, 0.4 - i * 0.05) for i, n in enumerate(sample_names)]
@@ -482,9 +482,9 @@ class TestSparseRetrievalFallback:
 
         mock_select_phase.return_value = (
             "phase_d",
-            {"vec_a": [0.1] * 1536, "conf_a": 0.8, "vec_b": [0.2] * 1536, "conf_b": 0.7},
+            {"vec_a": [0.1] * 1024, "conf_a": 0.8, "vec_b": [0.2] * 1024, "conf_b": 0.7},
         )
-        mock_midpoint.return_value = [0.15] * 1536
+        mock_midpoint.return_value = [0.15] * 1024
 
         # Search returns good scores (>= 0.6)
         good_candidates = [_make_qdrant_candidate(n, 0.85 - i * 0.05) for i, n in enumerate(sample_names)]
@@ -514,7 +514,7 @@ class TestSparseRetrievalFallback:
 
         # select_phase returns phase_c
         mock_select_phase.return_value = ("phase_c", {"reason": "user_a_swipe_count_below_threshold"})
-        mock_embedding.return_value = [0.3] * 1536
+        mock_embedding.return_value = [0.3] * 1024
 
         # Search returns low scores — but no fallback should trigger since Phase C was used
         low_score_candidates = [_make_qdrant_candidate(n, 0.4 - i * 0.05) for i, n in enumerate(sample_names)]

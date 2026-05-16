@@ -63,3 +63,37 @@ class TestGetQdrantClientSingleton:
 
         # Cleanup
         module._client = None
+
+
+class TestSearchNames:
+    """Tests for Qdrant search request construction."""
+
+    @override_settings(QDRANT_COLLECTION="test_names")
+    @patch("core.services.qdrant_client.get_qdrant_client")
+    def test_exclude_ids_are_sent_to_qdrant_filter(self, mock_get_client):
+        """Excluded point IDs should be pushed into Qdrant instead of only post-filtered."""
+        from core.services.qdrant_client import search_names
+
+        mock_client = mock_get_client.return_value
+        mock_client.search.return_value = []
+
+        search_names(
+            embedding=[0.0] * 1024,
+            filters={"active": True},
+            limit=10,
+            exclude_ids=["point-a", "point-b"],
+        )
+
+        query_filter = mock_client.search.call_args.kwargs["query_filter"]
+        assert query_filter.must_not is not None
+        assert query_filter.must_not[0].has_id == ["point-a", "point-b"]
+
+    @patch("core.services.qdrant_client.get_qdrant_client")
+    def test_rejects_wrong_dimension_query_embedding(self, mock_get_client):
+        """Search should fail before Qdrant when a stale non-Nova vector is used."""
+        from core.services.qdrant_client import search_names
+
+        with pytest.raises(ValueError, match="Qdrant query embedding must be 1024 dimensions"):
+            search_names(embedding=[0.0] * 1536)
+
+        mock_get_client.assert_not_called()

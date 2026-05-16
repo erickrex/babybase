@@ -124,11 +124,13 @@ export default function PreferencesPage() {
         const { coupleState } = await syncAfterMutation(() =>
           api.post('/onboarding/preferences/', answers)
         );
-        const canEnterApp =
+        const hasCoupleReady =
           coupleState.couple?.status === 'active' &&
           coupleState.onboardingComplete.user &&
           coupleState.onboardingComplete.partner;
-        navigate(canEnterApp ? '/deck' : '/onboarding/partner');
+        const soloReady =
+          !coupleState.hasCouple && coupleState.onboardingComplete.user;
+        navigate(hasCoupleReady || soloReady ? '/deck' : '/onboarding/partner');
       } catch (err: unknown) {
         const error = err as { response?: { data?: { message?: string } } };
         const message = error.response?.data?.message || 'Failed to save preferences.';

@@ -8,10 +8,13 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import (
     FieldCondition,
     Filter,
+    HasIdCondition,
     MatchValue,
     NamedVector,
     SearchParams,
 )
+
+from core.services.embeddings import validate_embedding_dimension
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +78,7 @@ def search_names(
     Filtered semantic search against the names collection.
 
     Args:
-        embedding: Query vector (1536 dimensions).
+        embedding: Query vector (1024 dimensions).
         filters: Dict of payload field filters (e.g. {"gender_usage": "girl", "active": True}).
         limit: Max results to return.
         exclude_ids: List of Qdrant point ID strings to exclude.
@@ -84,6 +87,7 @@ def search_names(
     Returns:
         List of dicts with keys: point_id, name_id, canonical_name, score, payload.
     """
+    validate_embedding_dimension(embedding, context="Qdrant query embedding")
     client = get_qdrant_client()
 
     query_filter = _build_payload_filters(filters)
@@ -96,6 +100,17 @@ def search_names(
         else:
             query_filter.must.append(active_condition)
 
+    exclude_list = list(dict.fromkeys(exclude_ids or []))
+    exclude_set = set(exclude_list)
+    if exclude_list:
+        exclude_condition = HasIdCondition(has_id=exclude_list)
+        if query_filter is None:
+            query_filter = Filter(must_not=[exclude_condition])
+        elif query_filter.must_not is None:
+            query_filter.must_not = [exclude_condition]
+        else:
+            query_filter.must_not.append(exclude_condition)
+
     results = client.search(
         collection_name=settings.QDRANT_COLLECTION,
         query_vector=NamedVector(name=vector_name, vector=embedding),
@@ -104,9 +119,6 @@ def search_names(
         with_payload=True,
         search_params=SearchParams(exact=False, hnsw_ef=128),
     )
-
-    # Filter out excluded IDs in post-processing
-    exclude_set = set(exclude_ids) if exclude_ids else set()
 
     output = []
     for hit in results:
@@ -198,8 +210,8 @@ def get_bridge_candidates(
     Applies international_score boosting and residence_country language filtering.
 
     Args:
-        parent_a_vector: Parent A's taste vector (1536 dim).
-        parent_b_vector: Parent B's taste vector (1536 dim).
+        parent_a_vector: Parent A's taste vector (1024 dim).
+        parent_b_vector: Parent B's taste vector (1024 dim).
         filters: Optional payload filters.
         limit: Max results to return.
         residence_country: ISO 3166-1 alpha-2 code for language filtering.

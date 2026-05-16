@@ -121,6 +121,69 @@ class TestCoupleMeView:
         assert active_response.data["data"]["partner"]["email"] == user_b.email
 
 
+class TestSoloOnboardingFlow:
+    """Regression tests for solo user onboarding (skipped partner invite)."""
+
+    def test_solo_user_onboarding_complete_reported_correctly(self, db):
+        """After completing onboarding without a couple, /couples/me/ reports user onboarded."""
+        user = User.objects.create_user(email="solo@test.com", password="testpass123")
+        client = api_client_for(user)
+
+        # Before onboarding: user not onboarded
+        response = client.get("/api/v1/couples/me/")
+        assert response.status_code == 200
+        assert response.data["data"]["has_couple"] is False
+        assert response.data["data"]["onboarding_complete"]["user"] is False
+
+        # Complete onboarding solo (no couple)
+        OnboardingResponse.objects.create(
+            user=user,
+            couple=None,
+            preferred_name_backgrounds=["English"],
+            preferred_name_age="balanced",
+            baby_gender_preference="girl",
+            preferred_name_length="any",
+            historical_importance="low",
+        )
+
+        # After onboarding: user IS onboarded
+        response = client.get("/api/v1/couples/me/")
+        assert response.status_code == 200
+        assert response.data["data"]["has_couple"] is False
+        assert response.data["data"]["onboarding_complete"]["user"] is True
+        assert response.data["data"]["onboarding_complete"]["partner"] is False
+
+    def test_solo_onboarding_via_preferences_endpoint(self, db):
+        """POST /onboarding/preferences/ succeeds for a solo user and marks them onboarded."""
+        user = User.objects.create_user(email="solo-prefs@test.com", password="testpass123")
+        client = api_client_for(user)
+
+        payload = {
+            "preferred_name_backgrounds": ["Spanish", "Italian"],
+            "preferred_name_age": "new",
+            "baby_gender_preference": "boy",
+            "preferred_name_length": "short",
+            "historical_importance": "medium",
+            "residence_country": "US",
+        }
+        response = client.post("/api/v1/onboarding/preferences/", payload, format="json")
+        assert response.status_code == 201
+
+        # Verify couple status now shows user onboarded
+        status_response = client.get("/api/v1/couples/me/")
+        assert status_response.data["data"]["onboarding_complete"]["user"] is True
+
+    def test_solo_user_not_onboarded_without_response(self, db):
+        """A solo user with no onboarding response is correctly reported as not onboarded."""
+        user = User.objects.create_user(email="solo-new@test.com", password="testpass123")
+        client = api_client_for(user)
+
+        response = client.get("/api/v1/couples/me/")
+        assert response.status_code == 200
+        assert response.data["data"]["has_couple"] is False
+        assert response.data["data"]["onboarding_complete"]["user"] is False
+
+
 class TestGenerateDeckView:
     """Regression tests for deck generation view semantics."""
 
@@ -134,7 +197,7 @@ class TestGenerateDeckView:
     ):
         couple, user_a, _ = api_couple
         client = api_client_for(user_a)
-        mock_embedding.return_value = [0.1] * 1536
+        mock_embedding.return_value = [0.1] * 1024
 
         name = Name.objects.create(
             canonical_name="ApiDeckName",

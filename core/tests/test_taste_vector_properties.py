@@ -12,7 +12,7 @@ import uuid
 from datetime import timedelta
 
 import pytest
-from hypothesis import assume, given, settings
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from core.services.taste_vectors import (
@@ -29,7 +29,7 @@ from core.services.taste_vectors import (
 
 # Small dimension for fast tests on pure math properties
 SMALL_DIM = 16
-FULL_DIM = 1536
+FULL_DIM = 1024
 
 
 @st.composite
@@ -52,7 +52,7 @@ def st_embedding(draw, dim=SMALL_DIM):
 
 @st.composite
 def st_full_dim_embedding(draw):
-    """Generate a unit-length 1536-dim embedding using a seed for efficiency."""
+    """Generate a unit-length 1024-dim embedding using a seed for efficiency."""
     seed = draw(st.integers(min_value=0, max_value=2**32 - 1))
     rng = random.Random(seed)
     raw = [rng.uniform(-1.0, 1.0) for _ in range(FULL_DIM)]
@@ -101,7 +101,7 @@ class TestVectorStorageRoundTrip:
     """
     **Validates: Requirements 1.1, 1.4**
 
-    For any valid list of 1536 floats, storing in UserTasteVector.embedding
+    For any valid list of 1024 floats, storing in UserTasteVector.embedding
     and reading back produces numerically equivalent list.
     """
 
@@ -1151,4 +1151,59 @@ class TestSparsePoolRelaxesDiversityConstraints:
         # Relaxed should allow at least as many (usually more) same-letter names
         assert relaxed_a_count >= normal_a_count, (
             f"Relaxed ({relaxed_a_count}) should allow >= normal ({normal_a_count}) same-letter names"
+        )
+
+# ---------------------------------------------------------------------------
+# Property: Vector dimension invariant through taste vector computation
+# Feature: nova-embedding-migration, Property 3: Vector dimension invariant
+# ---------------------------------------------------------------------------
+
+
+class TestVectorDimensionInvariantThroughTasteVectorComputation:
+    """
+    **Validates: Requirements 3.2 (nova-embedding-migration)**
+
+    For any non-empty set of 1024-dimensional unit vectors, computing the
+    weighted centroid and normalizing the result SHALL produce a 1024-dimensional
+    vector with L2 norm ≈ 1.0.
+    """
+
+    @given(
+        seeds=st.lists(
+            st.integers(min_value=0, max_value=2**32 - 1),
+            min_size=1,
+            max_size=20,
+        ),
+    )
+    @settings(max_examples=100, suppress_health_check=[HealthCheck.large_base_example])
+    def test_centroid_preserves_dimension_and_unit_norm(self, seeds):
+        """Weighted centroid + normalize produces a 1024-dim unit vector."""
+        from core.services.taste_vectors import (
+            compute_weighted_centroid,
+            normalize_vector,
+        )
+
+        # Generate 1024-dim unit vectors from seeds for efficiency
+        vectors = []
+        for seed in seeds:
+            rng = random.Random(seed)
+            raw = [rng.uniform(-1.0, 1.0) for _ in range(1024)]
+            magnitude = math.sqrt(sum(x * x for x in raw))
+            vectors.append([x / magnitude for x in raw])
+
+        # Use uniform weights
+        weights = [1.0] * len(vectors)
+
+        centroid = compute_weighted_centroid(vectors, weights)
+        normalized = normalize_vector(centroid)
+
+        # Assert dimension is preserved at 1024
+        assert len(normalized) == 1024, (
+            f"Expected 1024-dim vector, got {len(normalized)}"
+        )
+
+        # Assert L2 norm ≈ 1.0
+        norm = math.sqrt(sum(x * x for x in normalized))
+        assert 0.99 <= norm <= 1.01, (
+            f"Normalized vector norm {norm} not in [0.99, 1.01]"
         )

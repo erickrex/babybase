@@ -1,19 +1,32 @@
 """Embedding generation service for name vectors."""
 
+import json
 import logging
 
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
-from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-MODEL = "text-embedding-3-small"  # 1536 dimensions
+MODEL = "amazon.nova-embed-text-v1"
+EMBEDDING_DIM = 1024
 MAX_BATCH_SIZE = 20
 
 
-def _get_openai_client() -> OpenAI:
-    """Return an OpenAI client configured from Django settings."""
-    return OpenAI(api_key=settings.OPENAI_API_KEY)
+def _get_bedrock_client():
+    """Return a boto3 Bedrock Runtime client configured from Django settings."""
+    return boto3.client(
+        "bedrock-runtime",
+        region_name=settings.AWS_BEDROCK_REGION,
+    )
+
+
+def validate_embedding_dimension(embedding: list[float], *, context: str = "embedding") -> list[float]:
+    """Validate that an embedding matches the configured Nova Embed dimension."""
+    if len(embedding) != EMBEDDING_DIM:
+        raise ValueError(f"{context} must be {EMBEDDING_DIM} dimensions, got {len(embedding)}.")
+    return embedding
 
 
 def build_semantic_text(name) -> str:
@@ -66,21 +79,28 @@ def build_cross_cultural_text(name) -> str:
 
 
 def generate_embedding(text: str) -> list[float]:
-    """Generate a single embedding via OpenAI API."""
-    client = _get_openai_client()
+    """Generate a single 1024-dim embedding via Bedrock Nova Embed."""
+    client = _get_bedrock_client()
+    request_body = json.dumps({"inputText": text})
     try:
-        response = client.embeddings.create(input=text, model=MODEL)
-        return response.data[0].embedding
-    except Exception:
-        logger.exception("OpenAI embedding generation failed for text length=%d", len(text))
+        response = client.invoke_model(
+            body=request_body,
+            modelId=MODEL,
+            accept="application/json",
+            contentType="application/json",
+        )
+        result = json.loads(response["body"].read())
+        return validate_embedding_dimension(result["embedding"], context="Bedrock embedding")
+    except (ClientError, BotoCoreError, ValueError):
+        logger.exception("Bedrock embedding failed for text length=%d", len(text))
         raise
 
 
 def generate_embeddings_batch(texts: list[str]) -> list[list[float]]:
     """
-    Generate embeddings for multiple texts in batches.
+    Generate embeddings for multiple texts, one invoke_model call per text.
 
-    Batches requests to OpenAI with max 20 texts per request for efficiency.
+    Processes texts in chunks of MAX_BATCH_SIZE (20) for logging and error isolation.
 
     Args:
         texts: List of text strings to embed.
@@ -88,23 +108,38 @@ def generate_embeddings_batch(texts: list[str]) -> list[list[float]]:
     Returns:
         List of embedding vectors in the same order as input texts.
     """
-    client = _get_openai_client()
+    client = _get_bedrock_client()
     all_embeddings: list[list[float]] = []
 
+    num_batches = (len(texts) + MAX_BATCH_SIZE - 1) // MAX_BATCH_SIZE
     logger.info(
         "Generating embeddings batch: %d texts in %d batches",
-        len(texts), (len(texts) + MAX_BATCH_SIZE - 1) // MAX_BATCH_SIZE,
+        len(texts), num_batches,
     )
 
     for i in range(0, len(texts), MAX_BATCH_SIZE):
         batch = texts[i : i + MAX_BATCH_SIZE]
-        try:
-            response = client.embeddings.create(input=batch, model=MODEL)
-            # Sort by index to maintain order
-            sorted_data = sorted(response.data, key=lambda x: x.index)
-            all_embeddings.extend([item.embedding for item in sorted_data])
-        except Exception:
-            logger.exception("OpenAI batch embedding failed at offset=%d batch_size=%d", i, len(batch))
-            raise
+        for batch_offset, text in enumerate(batch):
+            request_body = json.dumps({"inputText": text})
+            try:
+                response = client.invoke_model(
+                    body=request_body,
+                    modelId=MODEL,
+                    accept="application/json",
+                    contentType="application/json",
+                )
+                result = json.loads(response["body"].read())
+                all_embeddings.append(
+                    validate_embedding_dimension(
+                        result["embedding"],
+                        context=f"Bedrock embedding at offset {i + batch_offset}",
+                    )
+                )
+            except (ClientError, BotoCoreError, ValueError):
+                logger.exception(
+                    "Bedrock batch embedding failed at offset=%d batch_size=%d",
+                    i, len(batch),
+                )
+                raise
 
     return all_embeddings
