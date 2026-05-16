@@ -132,9 +132,17 @@ export default function PreferencesPage() {
           !coupleState.hasCouple && coupleState.onboardingComplete.user;
         navigate(hasCoupleReady || soloReady ? '/deck' : '/onboarding/partner');
       } catch (err: unknown) {
-        const error = err as { response?: { data?: { message?: string } } };
+        const error = err as { response?: { data?: { message?: string; errors?: Record<string, string[]> }; status?: number } };
         const message = error.response?.data?.message || 'Failed to save preferences.';
         setError(message);
+
+        // Navigate back to the gender question if there's a gender conflict
+        if (error.response?.status === 409 && error.response?.data?.errors?.baby_gender_preference) {
+          const genderStepIndex = QUESTIONS.findIndex((q) => q.key === 'baby_gender_preference');
+          if (genderStepIndex >= 0) {
+            setStep(genderStepIndex);
+          }
+        }
       } finally {
         setIsLoading(false);
       }

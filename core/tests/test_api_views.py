@@ -184,6 +184,104 @@ class TestSoloOnboardingFlow:
         assert response.data["data"]["onboarding_complete"]["user"] is False
 
 
+class TestGenderConflictValidation:
+    """Regression tests for boy/girl gender conflict detection during onboarding."""
+
+    def test_boy_girl_conflict_returns_409(self, db):
+        """Second parent choosing boy when first chose girl gets a 409 conflict."""
+        user_a = User.objects.create_user(email="gender-a@test.com", password="testpass123")
+        user_b = User.objects.create_user(email="gender-b@test.com", password="testpass123")
+        couple = Couple.objects.create(
+            user_a=user_a, user_b=user_b, status=CoupleStatus.ACTIVE, residence_country="US"
+        )
+        # First parent onboards with "girl"
+        OnboardingResponse.objects.create(
+            user=user_a,
+            couple=couple,
+            preferred_name_backgrounds=["English"],
+            preferred_name_age="balanced",
+            baby_gender_preference="girl",
+            preferred_name_length="any",
+            historical_importance="medium",
+        )
+
+        # Second parent tries to onboard with "boy" — conflict
+        client_b = api_client_for(user_b)
+        payload = {
+            "preferred_name_backgrounds": ["Spanish"],
+            "preferred_name_age": "new",
+            "baby_gender_preference": "boy",
+            "preferred_name_length": "short",
+            "historical_importance": "low",
+            "residence_country": "US",
+        }
+        response = client_b.post("/api/v1/onboarding/preferences/", payload, format="json")
+
+        assert response.status_code == 409
+        assert "different baby gender" in response.data["message"]
+        assert "baby_gender_preference" in response.data["errors"]
+
+    def test_boy_nonbinary_no_conflict(self, db):
+        """One parent choosing boy and the other non_binary is allowed (mixed deck)."""
+        user_a = User.objects.create_user(email="mix-a@test.com", password="testpass123")
+        user_b = User.objects.create_user(email="mix-b@test.com", password="testpass123")
+        couple = Couple.objects.create(
+            user_a=user_a, user_b=user_b, status=CoupleStatus.ACTIVE, residence_country="DE"
+        )
+        OnboardingResponse.objects.create(
+            user=user_a,
+            couple=couple,
+            preferred_name_backgrounds=["German"],
+            preferred_name_age="old",
+            baby_gender_preference="boy",
+            preferred_name_length="any",
+            historical_importance="high",
+        )
+
+        client_b = api_client_for(user_b)
+        payload = {
+            "preferred_name_backgrounds": ["Italian"],
+            "preferred_name_age": "balanced",
+            "baby_gender_preference": "non_binary",
+            "preferred_name_length": "long",
+            "historical_importance": "medium",
+            "residence_country": "DE",
+        }
+        response = client_b.post("/api/v1/onboarding/preferences/", payload, format="json")
+
+        assert response.status_code == 201
+
+    def test_same_gender_no_conflict(self, db):
+        """Both parents choosing the same gender is fine."""
+        user_a = User.objects.create_user(email="same-a@test.com", password="testpass123")
+        user_b = User.objects.create_user(email="same-b@test.com", password="testpass123")
+        couple = Couple.objects.create(
+            user_a=user_a, user_b=user_b, status=CoupleStatus.ACTIVE, residence_country="MX"
+        )
+        OnboardingResponse.objects.create(
+            user=user_a,
+            couple=couple,
+            preferred_name_backgrounds=["Spanish"],
+            preferred_name_age="balanced",
+            baby_gender_preference="girl",
+            preferred_name_length="any",
+            historical_importance="medium",
+        )
+
+        client_b = api_client_for(user_b)
+        payload = {
+            "preferred_name_backgrounds": ["Spanish"],
+            "preferred_name_age": "new",
+            "baby_gender_preference": "girl",
+            "preferred_name_length": "short",
+            "historical_importance": "low",
+            "residence_country": "MX",
+        }
+        response = client_b.post("/api/v1/onboarding/preferences/", payload, format="json")
+
+        assert response.status_code == 201
+
+
 class TestGenerateDeckView:
     """Regression tests for deck generation view semantics."""
 

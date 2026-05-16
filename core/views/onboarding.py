@@ -30,6 +30,45 @@ def onboarding_preferences_view(request: Request) -> Response:
     # Couple is optional — solo users can onboard without one
     couple = get_couple_for_user(request.user)
 
+    # Check for boy/girl gender conflict with partner's existing onboarding
+    if couple:
+        from core.models import OnboardingResponse
+
+        partner = couple.user_b if couple.user_a == request.user else couple.user_a
+        if partner:
+            partner_onboarding = (
+                OnboardingResponse.objects.filter(user=partner, couple=couple)
+                .order_by("-created_at")
+                .first()
+            )
+            if partner_onboarding:
+                incoming_gender = serializer.validated_data.get("baby_gender_preference")
+                partner_gender = partner_onboarding.baby_gender_preference
+                # boy vs girl is a conflict — one of them made a mistake
+                gender_conflict = (
+                    {incoming_gender, partner_gender} == {"boy", "girl"}
+                )
+                if gender_conflict:
+                    logger.warning(
+                        "Gender conflict: user=%s chose %s but partner=%s chose %s",
+                        request.user.email,
+                        incoming_gender,
+                        partner.email,
+                        partner_gender,
+                    )
+                    return Response(
+                        {
+                            "status": "error",
+                            "message": (
+                                "Your partner selected a different baby gender. "
+                                "One of you chose boy and the other chose girl. "
+                                "Please confirm with your partner and try again."
+                            ),
+                            "errors": {"baby_gender_preference": ["Conflicts with partner's selection."]},
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
     response = save_preferences(request.user, couple, serializer.validated_data)
 
     logger.info("Onboarding completed: user=%s couple=%s", request.user.email, couple.id if couple else None)

@@ -318,10 +318,9 @@ def _merge_profiles(
         response_b.preferred_name_age,
         default="balanced",
     )
-    baby_gender = _merge_scalar(
+    baby_gender = _merge_gender(
         response_a.baby_gender_preference,
         response_b.baby_gender_preference,
-        default="boy",
     )
     preferred_length = _merge_scalar(
         response_a.preferred_name_length,
@@ -377,3 +376,18 @@ def _merge_scalar(value_a: str, value_b: str, default: str) -> str:
     if value_a == value_b:
         return value_a
     return default
+
+
+def _merge_gender(gender_a: str, gender_b: str) -> str:
+    """
+    Merge two baby gender preferences.
+
+    Rules:
+    - Both agree → use that value
+    - One picks non_binary + other picks boy/girl → non_binary (mixed deck)
+    - boy vs girl → non_binary (should not happen; view rejects this conflict)
+    """
+    if gender_a == gender_b:
+        return gender_a
+    # Any disagreement results in a mixed deck (no gender filter)
+    return "non_binary"
