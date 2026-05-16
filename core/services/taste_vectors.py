@@ -154,83 +154,70 @@ def compute_taste_vector(user):
     Recompute the user's taste vector from all swipe history across all couples.
 
     Steps:
-    1. Fetch all liked/disliked name IDs across all couples
-    2. Fetch semantic embeddings from Qdrant
+    1. Determine gender preference from the user's couple onboarding
+    2. Fetch liked name embeddings filtered by gender preference
     3. Apply recency weighting (exponential decay)
     4. Compute like centroid
     5. If like_rate > 0.8 and dislike_count >= 5: apply dislike repulsion
     6. Normalize to unit length
     7. Compute vector_variance
-    8. Compute confidence_score
+    8. Compute confidence_score (reduced if gender filter fell back)
     9. Persist to UserTasteVector
 
     Returns the updated UserTasteVector instance, or None if no valid vector can be computed.
     """
-    from core.models import Swipe, UserTasteVector
+    from core.models import OnboardingResponse, Swipe, UserTasteVector
     from core.services.onboarding import _fetch_vectors_for_name_ids
 
-    # Step 1: Fetch all swipes by this user across ALL couples (requirement 14.2)
-    all_swipes = Swipe.objects.filter(user=user).select_related("name")
+    # Step 1: Determine gender preference from the user's most recent onboarding
+    gender_preference = "non_binary"  # Default: include all names
+    latest_onboarding = (
+        OnboardingResponse.objects.filter(user=user)
+        .order_by("-created_at")
+        .first()
+    )
+    if latest_onboarding and latest_onboarding.baby_gender_preference:
+        gender_preference = latest_onboarding.baby_gender_preference
 
-    if not all_swipes.exists():
-        logger.debug("No swipes found for user %s, skipping taste vector computation", user.id)
-        return None
-
-    # Separate into liked and disliked with timestamps
-    liked_name_ids = []
-    liked_timestamps = []
-    disliked_name_ids = []
-    disliked_timestamps = []
-
-    for swipe in all_swipes:
-        if swipe.action == "like":
-            liked_name_ids.append(str(swipe.name_id))
-            liked_timestamps.append(swipe.created_at)
-        elif swipe.action == "dislike":
-            disliked_name_ids.append(str(swipe.name_id))
-            disliked_timestamps.append(swipe.created_at)
-
-    if not liked_name_ids:
-        logger.debug("No liked names for user %s, skipping taste vector computation", user.id)
-        return None
-
-    # Step 2: Fetch semantic embeddings from Qdrant
-    try:
-        liked_vectors = _fetch_vectors_for_name_ids(liked_name_ids)
-    except Exception:
-        logger.exception("Qdrant unreachable fetching liked vectors for user %s", user.id)
-        # Return existing vector unchanged if available
-        existing = UserTasteVector.objects.filter(user=user).first()
-        return existing
+    # Step 2: Fetch gender-filtered liked name embeddings
+    liked_vectors, liked_timestamps, gender_fallback_used = get_gender_filtered_vectors(
+        user, gender_preference
+    )
 
     if not liked_vectors:
-        logger.warning("No vectors returned from Qdrant for user %s liked names", user.id)
+        logger.debug("No liked vectors for user %s, skipping taste vector computation", user.id)
         return None
 
+    # Fetch dislike info separately for repulsion check
+    all_swipes = Swipe.objects.filter(user=user)
+    total_likes = all_swipes.filter(action="like").count()
+    disliked_name_ids = list(
+        all_swipes.filter(action="dislike").values_list("name_id", flat=True)
+    )
+    disliked_timestamps_qs = list(
+        all_swipes.filter(action="dislike").values_list("created_at", flat=True)
+    )
+    dislike_count = len(disliked_name_ids)
+    total_swipes = total_likes + dislike_count
+    like_rate = total_likes / total_swipes if total_swipes > 0 else 0.0
+
     # Step 3: Apply recency weighting
-    # Only use timestamps for vectors we actually got back (Qdrant may not return all)
-    # Use the first N timestamps matching the number of vectors returned
     like_weights = compute_recency_weights(liked_timestamps[: len(liked_vectors)])
 
     # Step 4: Compute like centroid
     like_centroid = compute_weighted_centroid(liked_vectors, like_weights)
 
-    # Compute stats
-    total_swipes = len(liked_name_ids) + len(disliked_name_ids)
-    like_rate = len(liked_name_ids) / total_swipes if total_swipes > 0 else 0.0
-    dislike_count = len(disliked_name_ids)
-
     # Step 5: Apply dislike repulsion if conditions met
     final_vector = like_centroid
     if like_rate > 0.8 and dislike_count >= 5:
         try:
-            disliked_vectors = _fetch_vectors_for_name_ids(disliked_name_ids)
+            disliked_vectors = _fetch_vectors_for_name_ids([str(nid) for nid in disliked_name_ids])
         except Exception:
             logger.exception("Qdrant unreachable fetching disliked vectors for user %s", user.id)
             disliked_vectors = []
 
         if disliked_vectors:
-            dislike_weights = compute_recency_weights(disliked_timestamps[: len(disliked_vectors)])
+            dislike_weights = compute_recency_weights(disliked_timestamps_qs[: len(disliked_vectors)])
             dislike_centroid = compute_weighted_centroid(disliked_vectors, dislike_weights)
             final_vector = apply_dislike_repulsion(like_centroid, dislike_centroid)
 
@@ -240,7 +227,7 @@ def compute_taste_vector(user):
     # Step 7: Compute vector_variance
     vector_variance = compute_vector_variance(liked_vectors, like_centroid)
 
-    # Step 8: Compute confidence_score
+    # Step 8: Compute confidence_score (reduced if gender filter fell back)
     now = timezone.now()
     days_since_update = 0.0  # Fresh computation
     confidence = compute_confidence_score(
@@ -249,6 +236,15 @@ def compute_taste_vector(user):
         vector_variance=vector_variance,
         days_since_update=days_since_update,
     )
+
+    # Reduce confidence when gender filter fell back to all names (less targeted signal)
+    if gender_fallback_used:
+        confidence *= 0.8
+        logger.info(
+            "Gender filter fallback used for user %s, confidence reduced to %.3f",
+            user.id,
+            confidence,
+        )
 
     # Step 9: Persist to UserTasteVector (create or update)
     taste_vector, _created = UserTasteVector.objects.update_or_create(
@@ -264,11 +260,12 @@ def compute_taste_vector(user):
     )
 
     logger.info(
-        "Taste vector computed for user %s: swipes=%d, like_rate=%.2f, confidence=%.3f",
+        "Taste vector computed for user %s: swipes=%d, like_rate=%.2f, confidence=%.3f, gender_filter=%s",
         user.id,
         total_swipes,
         like_rate,
         confidence,
+        gender_preference,
     )
 
     return taste_vector

@@ -197,71 +197,6 @@ def get_similar_to_names(
     )
 
 
-def get_bridge_candidates(
-    parent_a_vector: list[float],
-    parent_b_vector: list[float],
-    filters: dict | None = None,
-    limit: int = 50,
-    residence_country: str | None = None,
-) -> list[dict]:
-    """
-    Find bridge names by searching at the midpoint between two parent vectors.
-
-    Applies international_score boosting and residence_country language filtering.
-
-    Args:
-        parent_a_vector: Parent A's taste vector (1024 dim).
-        parent_b_vector: Parent B's taste vector (1024 dim).
-        filters: Optional payload filters.
-        limit: Max results to return.
-        residence_country: ISO 3166-1 alpha-2 code for language filtering.
-
-    Returns:
-        List of result dicts (same format as search_names), with international_score
-        boost applied and filtered to names usable in residence_country.
-    """
-    midpoint = _midpoint_vectors(parent_a_vector, parent_b_vector)
-
-    # Retrieve more candidates for post-filtering
-    retrieval_limit = limit * 2
-    candidates = search_names(
-        embedding=midpoint,
-        filters=filters,
-        limit=retrieval_limit,
-        vector_name="semantic",
-    )
-
-    # Filter to names matching residence_country languages
-    if residence_country:
-        residence_langs = _get_country_languages(residence_country)
-        if residence_langs:
-            filtered = []
-            for candidate in candidates:
-                payload = candidate.get("payload", {})
-                name_languages = set(payload.get("languages") or [])
-                # Keep names that share at least one language with residence country
-                # or have high international_score (usable anywhere)
-                international_score = payload.get("international_score", 0.0)
-                if name_languages & residence_langs or international_score >= 0.8:
-                    filtered.append(candidate)
-            # If filtering removed too many, fall back to unfiltered
-            if len(filtered) >= limit // 2:
-                candidates = filtered
-
-    # Boost names with high international_score
-    for candidate in candidates:
-        payload = candidate.get("payload", {})
-        international_score = payload.get("international_score", 0.0)
-        if international_score and isinstance(international_score, (int, float)):
-            # Boost the retrieval score by up to 15% based on international_score
-            candidate["score"] = candidate.get("score", 0.0) + (international_score * 0.15)
-
-    # Re-sort by boosted score
-    candidates.sort(key=lambda c: c.get("score", 0.0), reverse=True)
-
-    return candidates[:limit]
-
-
 def _average_vectors(vectors: list[list[float]]) -> list[float]:
     """Compute element-wise average of multiple vectors."""
     if not vectors:
@@ -278,13 +213,3 @@ def _average_vectors(vectors: list[list[float]]) -> list[float]:
 def _midpoint_vectors(vec_a: list[float], vec_b: list[float]) -> list[float]:
     """Compute element-wise midpoint of two vectors."""
     return [(a + b) / 2.0 for a, b in zip(vec_a, vec_b)]
-
-
-def _get_country_languages(country_code: str) -> set[str]:
-    """Map ISO 3166-1 alpha-2 country code to primary language codes.
-
-    Delegates to the shared country_languages utility.
-    """
-    from core.services.country_languages import get_country_languages
-
-    return get_country_languages(country_code)
