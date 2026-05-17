@@ -9,7 +9,7 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-MODEL = "amazon.nova-embed-text-v1"
+MODEL = "amazon.titan-embed-text-v2:0"
 EMBEDDING_DIM = 1024
 MAX_BATCH_SIZE = 20
 
@@ -79,9 +79,9 @@ def build_cross_cultural_text(name) -> str:
 
 
 def generate_embedding(text: str) -> list[float]:
-    """Generate a single 1024-dim embedding via Bedrock Nova Embed."""
+    """Generate a single 1024-dim embedding via Bedrock Titan Embed V2."""
     client = _get_bedrock_client()
-    request_body = json.dumps({"inputText": text})
+    request_body = json.dumps({"inputText": text, "dimensions": EMBEDDING_DIM, "normalize": True})
     try:
         response = client.invoke_model(
             body=request_body,
@@ -120,7 +120,7 @@ def generate_embeddings_batch(texts: list[str]) -> list[list[float]]:
     for i in range(0, len(texts), MAX_BATCH_SIZE):
         batch = texts[i : i + MAX_BATCH_SIZE]
         for batch_offset, text in enumerate(batch):
-            request_body = json.dumps({"inputText": text})
+            request_body = json.dumps({"inputText": text, "dimensions": EMBEDDING_DIM, "normalize": True})
             try:
                 response = client.invoke_model(
                     body=request_body,
