@@ -2,6 +2,7 @@
 
 import logging
 
+from django.core.exceptions import ImproperlyConfigured
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -109,6 +110,12 @@ def generate_deck_view(request: Request) -> Response:
     logger.info("Generating deck: couple=%s mode=%s", couple.id, mode)
     try:
         deck = generate_deck(couple, mode=mode)
+    except ImproperlyConfigured as exc:
+        logger.error("Deck generation misconfigured: %s", exc)
+        return Response(
+            {"status": "error", "message": "Recommendation service is not configured. Please contact support."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
     except Exception:
         logger.exception("Deck generation failed: couple=%s mode=%s", couple.id, mode)
         return Response(

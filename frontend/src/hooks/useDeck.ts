@@ -72,12 +72,14 @@ export function useDeck(mode: string = 'best_match') {
         error: null,
         tasteDrift: tasteDrift || null,
       });
-    } catch {
+    } catch (err: unknown) {
+      const apiError = err as { response?: { data?: { message?: string } } };
+      const message = apiError?.response?.data?.message || 'Failed to load deck';
       setState((prev) => ({
         ...prev,
         isLoading: false,
         isExhausted: true,
-        error: 'Failed to load deck',
+        error: message,
       }));
     }
   }, [mode]);
