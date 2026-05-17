@@ -124,13 +124,15 @@ export default function PreferencesPage() {
         const { coupleState } = await syncAfterMutation(() =>
           api.post('/onboarding/preferences/', answers)
         );
-        const hasCoupleReady =
-          coupleState.couple?.status === 'active' &&
-          coupleState.onboardingComplete.user &&
-          coupleState.onboardingComplete.partner;
-        const soloReady =
-          !coupleState.hasCouple && coupleState.onboardingComplete.user;
-        navigate(hasCoupleReady || soloReady ? '/deck' : '/onboarding/partner');
+
+        // Solo user or fully onboarded couple → go to deck
+        // Only redirect to partner page if couple exists, has a partner, and partner hasn't onboarded
+        const needsPartnerOnboarding =
+          coupleState.hasCouple &&
+          coupleState.partner !== null &&
+          !coupleState.onboardingComplete.partner;
+
+        navigate(needsPartnerOnboarding ? '/onboarding/partner' : '/deck');
       } catch (err: unknown) {
         const error = err as { response?: { data?: { message?: string; errors?: Record<string, string[]> }; status?: number } };
         const message = error.response?.data?.message || 'Failed to save preferences.';

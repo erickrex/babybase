@@ -13,6 +13,7 @@ export default function PartnerInvitePage() {
   const isPendingInvite = coupleState.couple?.status === 'pending';
   const isWaitingForPartner =
     coupleState.couple?.status === 'active' &&
+    coupleState.partner !== null &&
     coupleState.onboardingComplete.user &&
     !coupleState.onboardingComplete.partner;
 
@@ -43,7 +44,12 @@ export default function PartnerInvitePage() {
   };
 
   const handleSkip = () => {
-    navigate('/onboarding/preferences');
+    // If user already completed onboarding, go straight to deck
+    if (coupleState.onboardingComplete.user) {
+      navigate('/deck');
+    } else {
+      navigate('/onboarding/preferences');
+    }
   };
 
   if (isCoupleLoading) {
