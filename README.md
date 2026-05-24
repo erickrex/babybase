@@ -8,7 +8,7 @@ Tinder for baby names - a mobile-first web app where partners swipe on baby name
 - **Frontend**: React 19 (Vite) + TypeScript + Tailwind CSS
 - **Database**: PostgreSQL
 - **Vector Search**: Qdrant (semantic name recommendations)
-- **Embeddings**: AWS Bedrock Nova Embed `amazon.nova-embed-text-v1`
+- **Embeddings**: AWS Bedrock Titan Embed V2 `amazon.titan-embed-text-v2:0`
 - **Auth**: Token-based via DRF
 - **Python Package Manager**: UV
 
@@ -63,10 +63,10 @@ For Qdrant Cloud, set `QDRANT_URL` and `QDRANT_API_KEY` in `.env` instead.
 
 ### 3. Configure AWS Bedrock access
 
-The backend uses Bedrock Runtime with Nova Embed:
+The backend uses Bedrock Runtime with Titan Embed V2:
 
 ```text
-amazon.nova-embed-text-v1
+amazon.titan-embed-text-v2:0
 ```
 
 The embedding model returns 1024-dimensional vectors. The app validates this dimension before indexing or querying Qdrant.
@@ -85,7 +85,7 @@ aws sts get-caller-identity
 The active identity needs `bedrock:InvokeModel` for:
 
 ```text
-arn:aws:bedrock:*::foundation-model/amazon.nova-embed-text-v1
+arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0
 ```
 
 The `infra/` CDK project contains a minimal IAM role/policy for Bedrock invocation:
@@ -116,7 +116,7 @@ Seed the relational name metadata first:
 uv run python manage.py seed_names
 ```
 
-Then build the Qdrant collection and index all active names using Nova embeddings:
+Then build the Qdrant collection and index all active names using Titan Embed V2:
 
 ```bash
 uv run python manage.py index_names_to_qdrant --force-recreate
@@ -230,10 +230,10 @@ uv run python manage.py shell -c "from core.models import NameVectorIndexRef; pr
 
 ### Embedding model contract
 
-BabyBase is standardized on AWS Bedrock Nova Embed:
+BabyBase is standardized on AWS Bedrock Titan Embed V2:
 
 ```text
-amazon.nova-embed-text-v1
+amazon.titan-embed-text-v2:0
 ```
 
 The application assumes 1024-dimensional vectors end to end:
@@ -299,8 +299,8 @@ If `/api/v1/recommendations/deck/` returns an error or no usable results:
 |---------|--------------|-----|
 | `QDRANT_URL must be set` | Missing backend `.env` value | Set `QDRANT_URL`, then restart Django |
 | Empty recommendations after indexing | App queries a different collection than the index command used | Set `QDRANT_COLLECTION` consistently and re-run indexing |
-| Dimension mismatch mentioning `1024` | Stale non-Nova vector or old Qdrant collection | Run `index_names_to_qdrant --force-recreate` |
-| Bedrock access denied | AWS identity lacks `bedrock:InvokeModel` | Grant access to the Nova Embed foundation model |
+| Dimension mismatch mentioning `1024` | Stale vector or old Qdrant collection | Run `index_names_to_qdrant --force-recreate` |
+| Bedrock access denied | AWS identity lacks `bedrock:InvokeModel` | Grant access to the Titan Embed V2 foundation model |
 | Local deck generation hangs or fails | Qdrant or PostgreSQL is not running | Start local services and retry |
 
 ## API Endpoints

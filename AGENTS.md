@@ -10,7 +10,7 @@ BabyBase is a "Tinder for baby names" — a mobile-first web app where partners 
 - **Frontend**: React 19 (Vite) + TypeScript + Tailwind CSS
 - **Database**: PostgreSQL
 - **Vector Search**: Qdrant (semantic name recommendations)
-- **Embeddings**: OpenAI `text-embedding-3-small`
+- **Embeddings**: AWS Bedrock Titan Embed V2 `amazon.titan-embed-text-v2:0`
 - **Package Manager (Python)**: UV
 - **Package Manager (Frontend)**: npm
 - **Auth**: Token-based auth via DRF
@@ -113,7 +113,7 @@ cd frontend && npm run test                # Vitest
 - Catch specific exceptions — never bare `except Exception`
 - Services raise domain-specific exceptions (e.g., `SwipeValidationError`, `CoupleExistsError`)
 - Views catch service exceptions and map to appropriate HTTP status codes
-- External API calls (OpenAI, Qdrant) wrapped in try/except with logging
+- External API calls (Bedrock Nova, Qdrant) wrapped in try/except with logging
 - Use `logger.exception()` for unexpected errors — it auto-includes the traceback
 - Return clean error responses to the client — never expose internal details
 

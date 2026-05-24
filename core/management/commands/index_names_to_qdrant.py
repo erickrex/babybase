@@ -20,7 +20,7 @@ from core.services.qdrant_client import get_qdrant_client
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_VERSION = "nova-embed-text-v1"
+EMBEDDING_VERSION = "titan-embed-text-v2"
 COLLECTION_NAME = "names_global_v1"
 VECTOR_DIM = EMBEDDING_DIM
 BATCH_SIZE = 20

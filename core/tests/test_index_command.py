@@ -22,7 +22,7 @@ def test_vector_dim_constant_is_1024():
     Validates: Requirements 2.2
     """
     assert VECTOR_DIM == 1024
-    assert EMBEDDING_VERSION == "nova-embed-text-v1"
+    assert EMBEDDING_VERSION == "titan-embed-text-v2"
 
 
 @patch("core.management.commands.index_names_to_qdrant.get_qdrant_client")
