@@ -55,7 +55,7 @@ const CoupleContext = createContext<CoupleContextType | undefined>(undefined);
 export function CoupleProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuth();
   const [coupleState, setCoupleState] = useState<CoupleState>(defaultState);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(isAuthenticated);
 
   const refresh = useCallback(async () => {
     if (!isAuthenticated) {
