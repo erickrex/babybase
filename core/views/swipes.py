@@ -88,11 +88,12 @@ def swipe_view(request: Request) -> Response:
         deck_id=deck_id_str,
     )
 
-    # Check for mutual match (only if action is 'like')
+    # Check for mutual match only if the stored swipe is actually a 'like'.
+    # When a duplicate is returned, the stored action may differ from the request action.
     is_match = False
     match_data = None
 
-    if action == "like":
+    if swipe.action == "like":
         if check_mutual_match(couple, name_id):
             match = create_match(couple, name_id)
             # Fetch with select_related to access display_name efficiently

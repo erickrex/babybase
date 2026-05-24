@@ -313,3 +313,32 @@ class TestSwipeViewMatchResponse:
         data = response.json()["data"]
         assert data["is_match"] is False
         assert data["match"] is None
+
+    def test_duplicate_dislike_then_like_does_not_create_false_match(self, api_client_for_user, sample_name):
+        """A user who previously disliked cannot trigger a match by re-sending like."""
+        client, couple, user_a, user_b = api_client_for_user
+
+        # User B likes the name
+        Swipe.objects.create(
+            couple=couple, user=user_b, name=sample_name, action=SwipeAction.LIKE
+        )
+
+        # User A dislikes the name first
+        Swipe.objects.create(
+            couple=couple, user=user_a, name=sample_name, action=SwipeAction.DISLIKE
+        )
+
+        # User A now sends a 'like' request — but the stored swipe is still 'dislike'
+        response = client.post(
+            "/api/v1/swipes/",
+            {"name_id": str(sample_name.id), "action": "like"},
+            format="json",
+        )
+
+        # Should NOT trigger a match because the stored swipe is 'dislike'
+        assert response.status_code == 200  # duplicate returns 200
+        data = response.json()["data"]
+        assert data["is_match"] is False
+        assert data["match"] is None
+        assert data["swipe"]["was_duplicate"] is True
+        assert data["swipe"]["action"] == "dislike"  # stored action unchanged
