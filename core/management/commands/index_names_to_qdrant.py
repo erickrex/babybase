@@ -126,6 +126,28 @@ class Command(BaseCommand):
             },
         )
         self.stdout.write(self.style.SUCCESS(f"Created collection '{self.collection_name}'."))
+        self._create_payload_indexes(client)
+
+    def _create_payload_indexes(self, client) -> None:
+        """Create payload indexes for fields used in filters."""
+        from qdrant_client.models import PayloadSchemaType
+
+        indexed_fields = {
+            "active": PayloadSchemaType.BOOL,
+            "gender_usage": PayloadSchemaType.KEYWORD,
+            "length_category": PayloadSchemaType.KEYWORD,
+            "age_style_category": PayloadSchemaType.KEYWORD,
+        }
+        for field_name, field_schema in indexed_fields.items():
+            try:
+                client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name=field_name,
+                    field_schema=field_schema,
+                )
+            except Exception as exc:
+                logger.warning("Payload index for %s already exists or failed: %s", field_name, exc)
+        self.stdout.write(f"Created payload indexes for: {', '.join(indexed_fields.keys())}")
 
     def _collection_requires_recreate(self, vectors_config) -> bool:
         """Return True when the collection is missing required named vectors or dimensions."""
