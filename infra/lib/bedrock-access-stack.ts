@@ -15,7 +15,7 @@ export class BedrockAccessStack extends cdk.Stack {
     // IAM Role for the application to assume when invoking Bedrock
     const bedrockRole = new iam.Role(this, 'BedrockInvokeRole', {
       assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
-      description: 'Role for BabyBase application to invoke Bedrock Nova Embed model',
+      description: 'Role for BabyBase application to invoke Bedrock Titan Embed V2 model',
     });
 
     // Least-privilege policy: only bedrock:InvokeModel on the specific model
@@ -30,7 +30,7 @@ export class BedrockAccessStack extends cdk.Stack {
     // Output the role ARN for application configuration
     this.bedrockRoleArn = new cdk.CfnOutput(this, 'BedrockRoleArn', {
       value: bedrockRole.roleArn,
-      description: 'ARN of the IAM role for Bedrock Nova Embed access',
+      description: 'ARN of the IAM role for Bedrock Titan Embed V2 access',
       exportName: 'BabyBaseBedrockRoleArn',
     });
   }

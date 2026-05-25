@@ -14,6 +14,7 @@ from core.models import (
     RecommendationDeck,
     RecommendationDeckItem,
 )
+from core.services.couples import get_couple_for_user
 from core.services.onboarding import (
     build_couple_query_embedding,
     build_couple_retrieval_profile,
@@ -41,6 +42,62 @@ logger = logging.getLogger(__name__)
 DECK_SIZE = 50
 # Retrieve more candidates than needed for re-ranking
 RETRIEVAL_MULTIPLIER = 2
+
+
+class DeckEligibilityError(Exception):
+    """Raised when a user is not ready to generate a recommendation deck."""
+
+
+def prepare_couple_for_deck(user) -> Couple:
+    """Return an active deck-ready couple, creating a solo couple when appropriate."""
+    from core.models import CoupleStatus
+
+    couple = get_couple_for_user(user)
+    if not couple:
+        if not OnboardingResponse.objects.filter(user=user, couple=None).exists():
+            raise DeckEligibilityError("You must complete onboarding before generating a deck.")
+        couple = Couple.objects.create(user_a=user, user_b=None, status=CoupleStatus.ACTIVE)
+        updated = OnboardingResponse.objects.filter(user=user, couple=None).update(couple=couple)
+        if updated:
+            logger.info("Associated %d solo onboarding response(s) with new solo couple=%s", updated, couple.id)
+        logger.info("Created solo couple: couple=%s user=%s", couple.id, user.email)
+
+    if couple.status != "active":
+        raise DeckEligibilityError("Your couple must be active to generate a deck.")
+
+    if couple.user_b is None:
+        if not OnboardingResponse.objects.filter(couple=couple, user=user).exists():
+            raise DeckEligibilityError("You must complete onboarding before generating a deck.")
+        return couple
+
+    onboarded_user_ids = set(
+        OnboardingResponse.objects.filter(couple=couple, user_id__in=[couple.user_a_id, couple.user_b_id])
+        .values_list("user_id", flat=True)
+        .distinct()
+    )
+    if onboarded_user_ids != {couple.user_a_id, couple.user_b_id}:
+        raise DeckEligibilityError("Both partners must complete onboarding before generating a deck.")
+
+    return couple
+
+
+def get_cached_deck(couple: Couple, mode: str) -> RecommendationDeck | None:
+    """Return the newest unexpired deck with unswiped items for the couple and mode."""
+    swiped_name_ids = _get_excluded_name_ids(couple)
+    decks = (
+        RecommendationDeck.objects.filter(
+            couple=couple,
+            mode=mode,
+            expires_at__gt=timezone.now(),
+            items__isnull=False,
+        )
+        .distinct()
+        .order_by("-created_at")
+    )
+    for deck in decks:
+        if deck.items.exclude(name_id__in=swiped_name_ids).exists():
+            return deck
+    return None
 
 
 def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDeck:

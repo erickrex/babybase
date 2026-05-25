@@ -90,7 +90,7 @@ class TestSearchNames:
 
     @patch("core.services.qdrant_client.get_qdrant_client")
     def test_rejects_wrong_dimension_query_embedding(self, mock_get_client):
-        """Search should fail before Qdrant when a stale non-Nova vector is used."""
+        """Search should fail before Qdrant when a stale non-Titan vector is used."""
         from core.services.qdrant_client import search_names
 
         with pytest.raises(ValueError, match="Qdrant query embedding must be 1024 dimensions"):

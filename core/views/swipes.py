@@ -14,6 +14,7 @@ from core.serializers.swipes import (
     MatchDetailSerializer,
     MatchSerializer,
     ShortlistSerializer,
+    SimilarNameSerializer,
     SwipeSerializer,
 )
 from core.services.couples import get_couple_for_user
@@ -23,6 +24,7 @@ from core.services.swipes import (
     create_match,
     get_similar_names,
     record_swipe,
+    validate_source_deck,
     validate_swipe,
 )
 from core.throttles import SwipeRateThrottle
@@ -72,6 +74,7 @@ def swipe_view(request: Request) -> Response:
     # Validate the swipe
     try:
         validate_swipe(request.user, couple, name_id)
+        source_deck = validate_source_deck(couple, name_id, deck_id_str)
     except SwipeValidationError as e:
         logger.warning("Swipe validation failed: user=%s name=%s reason=%s", request.user.email, name_id, str(e))
         return Response(
@@ -85,7 +88,7 @@ def swipe_view(request: Request) -> Response:
         couple=couple,
         name_id=name_id,
         action=action,
-        deck_id=deck_id_str,
+        source_deck=source_deck,
     )
 
     # Check for mutual match only if the stored swipe is actually a 'like'.
@@ -227,21 +230,8 @@ def similar_names_view(request: Request, name_id: str) -> Response:
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    # Get similar names from Qdrant
     similar = get_similar_names(name_id, couple)
-
-    # Format response
-    results = []
-    for item in similar:
-        results.append({
-            "name_id": item.get("name_id"),
-            "canonical_name": item.get("canonical_name"),
-            "score": item.get("score", 0.0),
-            "origin_backgrounds": item.get("payload", {}).get("origin_backgrounds", []),
-            "gender_usage": item.get("payload", {}).get("gender_usage", []),
-            "length_category": item.get("payload", {}).get("length_category", ""),
-            "age_style_category": item.get("payload", {}).get("age_style_category", ""),
-        })
+    results = SimilarNameSerializer(similar, many=True).data
 
     return Response(
         {"status": "success", "data": results},

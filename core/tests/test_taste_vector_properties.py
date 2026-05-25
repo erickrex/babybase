@@ -1155,13 +1155,13 @@ class TestSparsePoolRelaxesDiversityConstraints:
 
 # ---------------------------------------------------------------------------
 # Property: Vector dimension invariant through taste vector computation
-# Feature: nova-embedding-migration, Property 3: Vector dimension invariant
+# Feature: titan-embedding-migration, Property 3: Vector dimension invariant
 # ---------------------------------------------------------------------------
 
 
 class TestVectorDimensionInvariantThroughTasteVectorComputation:
     """
-    **Validates: Requirements 3.2 (nova-embedding-migration)**
+    **Validates: Requirements 3.2 (titan-embedding-migration)**
 
     For any non-empty set of 1024-dimensional unit vectors, computing the
     weighted centroid and normalizing the result SHALL produce a 1024-dimensional

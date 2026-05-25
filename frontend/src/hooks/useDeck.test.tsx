@@ -87,5 +87,42 @@ describe('useDeck', () => {
 
     const deckCalls = mockedApi.post.mock.calls.filter(([url]) => url === '/recommendations/deck/');
     expect(deckCalls).toHaveLength(1);
+    expect(deckCalls[0][1]).toEqual({ mode: 'best_match', force_refresh: false });
+  });
+
+  it('requests force refresh when refreshDeck is called', async () => {
+    const { result } = renderHook(() => useDeck('best_match'));
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    act(() => {
+      result.current.refreshDeck();
+    });
+
+    await waitFor(() => {
+      const deckCalls = mockedApi.post.mock.calls.filter(([url]) => url === '/recommendations/deck/');
+      expect(deckCalls).toHaveLength(2);
+    });
+
+    const deckCalls = mockedApi.post.mock.calls.filter(([url]) => url === '/recommendations/deck/');
+    expect(deckCalls[0][1]).toEqual({ mode: 'best_match', force_refresh: false });
+    expect(deckCalls[1][1]).toEqual({ mode: 'best_match', force_refresh: true });
+  });
+
+  it('passes the loaded deck id with swipe requests', async () => {
+    const { result } = renderHook(() => useDeck('best_match'));
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.swipe('name-1', 'like');
+    });
+
+    const swipeCall = mockedApi.post.mock.calls.find(([url]) => url === '/swipes/');
+    expect(swipeCall?.[1]).toEqual({ name_id: 'name-1', action: 'like', deck_id: 'deck-1' });
   });
 });

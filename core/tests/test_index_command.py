@@ -17,7 +17,7 @@ from core.models import Name, NameVectorIndexRef
 
 def test_vector_dim_constant_is_1024():
     """
-    VECTOR_DIM must be 1024 to match Nova Embed output dimensions.
+    VECTOR_DIM must be 1024 to match Titan Embed V2 output dimensions.
 
     Validates: Requirements 2.2
     """

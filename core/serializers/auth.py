@@ -1,6 +1,8 @@
 """Authentication serializers for BabyBase."""
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 User = get_user_model()
@@ -31,6 +33,10 @@ class RegisterSerializer(serializers.Serializer):
     def validate(self, attrs: dict) -> dict:
         if attrs["password"] != attrs["password_confirm"]:
             raise serializers.ValidationError({"password_confirm": "Passwords do not match."})
+        try:
+            validate_password(attrs["password"], user=User(email=attrs["email"]))
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"password": list(exc.messages)}) from exc
         return attrs
 
     def create(self, validated_data: dict) -> "User":
@@ -47,3 +53,6 @@ class LoginSerializer(serializers.Serializer):
 
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
+
+    def validate_email(self, value: str) -> str:
+        return value.lower()

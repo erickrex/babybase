@@ -5,10 +5,11 @@ from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
-from core.models import Couple, CoupleStatus, Name, OnboardingResponse
+from core.models import Couple, CoupleStatus, Name, OnboardingResponse, RecommendationDeck, Swipe, SwipeAction
 from core.services.couples import connect_pending_invite, create_couple
 
 User = get_user_model()
@@ -282,12 +283,69 @@ class TestGenderConflictValidation:
         assert response.status_code == 201
 
 
+class TestAuthViews:
+    """Regression tests for auth input normalization and password validation."""
+
+    def test_login_normalizes_email_case(self, db):
+        User.objects.create_user(email="mixed@test.com", password="StrongerPass123")
+        client = APIClient()
+
+        response = client.post(
+            "/api/v1/auth/login/",
+            {"email": "MIXED@Test.com", "password": "StrongerPass123"},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        assert response.data["data"]["user"]["email"] == "mixed@test.com"
+
+    def test_register_rejects_common_password(self, db):
+        client = APIClient()
+
+        response = client.post(
+            "/api/v1/auth/register/",
+            {"email": "common-password@test.com", "password": "password", "password_confirm": "password"},
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert "password" in response.data["errors"]
+
+    def test_register_rejects_numeric_password(self, db):
+        client = APIClient()
+
+        response = client.post(
+            "/api/v1/auth/register/",
+            {"email": "numeric-password@test.com", "password": "12345678", "password_confirm": "12345678"},
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert "password" in response.data["errors"]
+
+    def test_register_rejects_email_similar_password(self, db):
+        client = APIClient()
+
+        response = client.post(
+            "/api/v1/auth/register/",
+            {
+                "email": "similarpassword@test.com",
+                "password": "similarpassword",
+                "password_confirm": "similarpassword",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert "password" in response.data["errors"]
+
+
 class TestGenerateDeckView:
     """Regression tests for deck generation view semantics."""
 
     @patch("core.services.recommendations.search_names")
     @patch("core.services.recommendations.build_couple_query_embedding")
-    def test_repeated_post_generates_fresh_deck(
+    def test_repeated_post_reuses_unexpired_deck(
         self,
         mock_embedding,
         mock_search,
@@ -317,10 +375,145 @@ class TestGenerateDeckView:
         second = client.post("/api/v1/recommendations/deck/", {"mode": "best_match"}, format="json")
 
         assert first.status_code == 201
+        assert second.status_code == 200
+        assert first.data["data"]["cached"] is False
+        assert second.data["data"]["cached"] is True
+        assert first.data["data"]["id"] == second.data["data"]["id"]
+        assert mock_search.call_count == 1
+        assert couple.decks.count() == 1
+
+    @patch("core.services.recommendations.search_names")
+    @patch("core.services.recommendations.build_couple_query_embedding")
+    def test_force_refresh_generates_fresh_deck(
+        self,
+        mock_embedding,
+        mock_search,
+        api_couple,
+    ):
+        couple, user_a, _ = api_couple
+        client = api_client_for(user_a)
+        mock_embedding.return_value = [0.1] * 1024
+
+        name = Name.objects.create(
+            canonical_name="ApiRefreshDeckName",
+            display_name="Api Refresh Deck Name",
+            gender_usage=["boy"],
+            origin_backgrounds=["German"],
+            languages=["de", "en"],
+            scripts=["Latin"],
+            variants=[],
+            length_category="short",
+            age_style_category="classic",
+            historical_significance_score=0.5,
+            semantic_summary="Deck refresh regression test name.",
+            active=True,
+        )
+        mock_search.return_value = [_make_candidate(name, 0.9)]
+
+        first = client.post("/api/v1/recommendations/deck/", {"mode": "best_match"}, format="json")
+        second = client.post(
+            "/api/v1/recommendations/deck/",
+            {"mode": "best_match", "force_refresh": True},
+            format="json",
+        )
+
+        assert first.status_code == 201
         assert second.status_code == 201
+        assert first.data["data"]["cached"] is False
+        assert second.data["data"]["cached"] is False
         assert first.data["data"]["id"] != second.data["data"]["id"]
         assert mock_search.call_count == 2
         assert couple.decks.count() == 2
+
+    @patch("core.services.recommendations.search_names")
+    @patch("core.services.recommendations.build_couple_query_embedding")
+    def test_expired_deck_generates_fresh_deck(
+        self,
+        mock_embedding,
+        mock_search,
+        api_couple,
+    ):
+        couple, user_a, _ = api_couple
+        client = api_client_for(user_a)
+        expired_deck = RecommendationDeck.objects.create(
+            couple=couple,
+            mode="best_match",
+            retrieval_profile_json={},
+            expires_at=timezone.now() - timezone.timedelta(days=1),
+        )
+        mock_embedding.return_value = [0.1] * 1024
+
+        name = Name.objects.create(
+            canonical_name="ApiExpiredDeckName",
+            display_name="Api Expired Deck Name",
+            gender_usage=["boy"],
+            origin_backgrounds=["German"],
+            languages=["de", "en"],
+            scripts=["Latin"],
+            variants=[],
+            length_category="short",
+            age_style_category="classic",
+            historical_significance_score=0.5,
+            semantic_summary="Expired deck regression test name.",
+            active=True,
+        )
+        mock_search.return_value = [_make_candidate(name, 0.9)]
+
+        response = client.post("/api/v1/recommendations/deck/", {"mode": "best_match"}, format="json")
+
+        assert response.status_code == 201
+        assert response.data["data"]["cached"] is False
+        assert response.data["data"]["id"] != str(expired_deck.id)
+        assert mock_search.call_count == 1
+
+    def test_cached_deck_response_excludes_swiped_items(self, api_couple):
+        couple, user_a, _ = api_couple
+        client = api_client_for(user_a)
+        swiped_name = Name.objects.create(
+            canonical_name="ApiCachedSwipedName",
+            display_name="Api Cached Swiped Name",
+            gender_usage=["boy"],
+            origin_backgrounds=["German"],
+            languages=["de"],
+            scripts=["Latin"],
+            variants=[],
+            length_category="short",
+            age_style_category="classic",
+            historical_significance_score=0.5,
+            semantic_summary="Already swiped cached deck test name.",
+            active=True,
+        )
+        remaining_name = Name.objects.create(
+            canonical_name="ApiCachedRemainingName",
+            display_name="Api Cached Remaining Name",
+            gender_usage=["boy"],
+            origin_backgrounds=["German"],
+            languages=["de"],
+            scripts=["Latin"],
+            variants=[],
+            length_category="short",
+            age_style_category="classic",
+            historical_significance_score=0.5,
+            semantic_summary="Remaining cached deck test name.",
+            active=True,
+        )
+        deck = RecommendationDeck.objects.create(
+            couple=couple,
+            mode="best_match",
+            retrieval_profile_json={},
+            expires_at=timezone.now() + timezone.timedelta(days=1),
+        )
+        deck.items.create(name=swiped_name, rank=1)
+        deck.items.create(name=remaining_name, rank=2)
+        Swipe.objects.create(couple=couple, user=user_a, name=swiped_name, action=SwipeAction.LIKE)
+
+        response = client.post("/api/v1/recommendations/deck/", {"mode": "best_match"}, format="json")
+
+        assert response.status_code == 200
+        assert response.data["data"]["cached"] is True
+        assert [item["name"]["display_name"] for item in response.data["data"]["items"]] == [
+            "Api Cached Remaining Name"
+        ]
 
     def test_requires_specific_partner_onboarding(self, db):
         user_a = User.objects.create_user(email="ready-a@test.com", password="testpass123")

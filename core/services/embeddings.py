@@ -23,7 +23,7 @@ def _get_bedrock_client():
 
 
 def validate_embedding_dimension(embedding: list[float], *, context: str = "embedding") -> list[float]:
-    """Validate that an embedding matches the configured Nova Embed dimension."""
+    """Validate that an embedding matches the configured Titan Embed V2 dimension."""
     if len(embedding) != EMBEDDING_DIM:
         raise ValueError(f"{context} must be {EMBEDDING_DIM} dimensions, got {len(embedding)}.")
     return embedding

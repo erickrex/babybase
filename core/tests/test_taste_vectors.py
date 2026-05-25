@@ -712,7 +712,7 @@ class TestPhaseSelector:
 
     @pytest.mark.django_db
     def test_stale_dimension_vector_phase_c(self):
-        """Non-Nova taste vectors are not trusted for Phase D."""
+        """Non-Titan taste vectors are not trusted for Phase D."""
         user_a = User.objects.create_user(email="phase_dim_a@test.com", password="testpass123")
         user_b = User.objects.create_user(email="phase_dim_b@test.com", password="testpass123")
         couple = Couple.objects.create(

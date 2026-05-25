@@ -14,6 +14,7 @@ interface SwipeResult {
 }
 
 interface DeckState {
+  deckId: string | null;
   cards: NameCardData[];
   currentIndex: number;
   isLoading: boolean;
@@ -49,6 +50,7 @@ function mapDeckItem(item: Record<string, unknown>): NameCardData {
  */
 export function useDeck(mode: string = 'best_match') {
   const [state, setState] = useState<DeckState>({
+    deckId: null,
     cards: [],
     currentIndex: 0,
     isLoading: true,
@@ -58,13 +60,14 @@ export function useDeck(mode: string = 'best_match') {
   });
 
   // Load deck on mount
-  const loadDeck = useCallback(async () => {
+  const loadDeck = useCallback(async (forceRefresh: boolean = false) => {
     setState((prev) => ({ ...prev, isLoading: true, error: null }));
     try {
-      const res = await api.post('/recommendations/deck/', { mode });
+      const res = await api.post('/recommendations/deck/', { mode, force_refresh: forceRefresh });
       const items: NameCardData[] = res.data.data.items.map(mapDeckItem);
       const tasteDrift = res.data.data.taste_drift as TasteDrift | undefined;
       setState({
+        deckId: res.data.data.id,
         cards: items,
         currentIndex: 0,
         isLoading: false,
@@ -77,6 +80,7 @@ export function useDeck(mode: string = 'best_match') {
       const message = apiError?.response?.data?.message || 'Failed to load deck';
       setState((prev) => ({
         ...prev,
+        deckId: null,
         isLoading: false,
         isExhausted: true,
         error: message,
@@ -115,7 +119,7 @@ export function useDeck(mode: string = 'best_match') {
       });
 
       try {
-        const res = await api.post('/swipes/', { name_id: nameId, action });
+        const res = await api.post('/swipes/', { name_id: nameId, action, deck_id: state.deckId });
         if (res.data.data.is_match) {
           return { isMatch: true, matchData: res.data.data.match };
         }
@@ -125,12 +129,12 @@ export function useDeck(mode: string = 'best_match') {
         return { isMatch: false };
       }
     },
-    []
+    [state.deckId]
   );
 
   // Refresh deck (when exhausted)
   const refreshDeck = useCallback(() => {
-    void loadDeck();
+    void loadDeck(true);
   }, [loadDeck]);
 
   const currentCard = state.cards[state.currentIndex] || null;

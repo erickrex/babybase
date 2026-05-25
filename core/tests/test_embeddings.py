@@ -1,4 +1,4 @@
-# Feature: nova-embedding-migration, Property 1: Batch embedding preserves input order and output dimension
+# Feature: titan-embedding-migration, Property 1: Batch embedding preserves input order and output dimension
 """Property-based tests for the embedding service."""
 
 import hashlib
@@ -88,7 +88,7 @@ def test_batch_embedding_preserves_order_and_dimension(mock_get_client, texts):
         )
 
 
-# Feature: nova-embedding-migration, Property 2: Batch embedding respects MAX_BATCH_SIZE invocation boundary
+# Feature: titan-embedding-migration, Property 2: Batch embedding respects MAX_BATCH_SIZE invocation boundary
 @settings(max_examples=100)
 @given(
     texts=st.lists(
@@ -150,7 +150,7 @@ def test_batch_embedding_respects_max_batch_size_boundary(mock_get_client, texts
     )
 
 
-# Feature: nova-embedding-migration, Property 4: Text building functions produce template-conformant output
+# Feature: titan-embedding-migration, Property 4: Text building functions produce template-conformant output
 
 
 @dataclass

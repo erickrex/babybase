@@ -14,6 +14,7 @@ class GenerateDeckSerializer(serializers.Serializer):
         default=DeckMode.BEST_MATCH,
         required=False,
     )
+    force_refresh = serializers.BooleanField(default=False, required=False)
 
 
 class DeckItemSerializer(serializers.Serializer):

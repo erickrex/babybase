@@ -64,12 +64,28 @@ def validate_swipe(user: "User", couple: Couple, name_id: str) -> Name:
     return name
 
 
+def validate_source_deck(couple: Couple, name_id: str, deck_id: str | None = None) -> RecommendationDeck | None:
+    """Return a valid source deck, or raise when a provided deck does not contain the name."""
+    if not deck_id:
+        return None
+
+    source_deck = (
+        RecommendationDeck.objects.filter(id=deck_id, couple=couple, items__name_id=name_id)
+        .distinct()
+        .first()
+    )
+    if source_deck is None:
+        raise SwipeValidationError("Deck not found for this couple and name.")
+
+    return source_deck
+
+
 def record_swipe(
     user: "User",
     couple: Couple,
     name_id: str,
     action: str,
-    deck_id: str | None = None,
+    source_deck: RecommendationDeck | None = None,
 ) -> tuple[Swipe, bool]:
     """
     Persist a swipe record. Handles duplicates gracefully.
@@ -82,19 +98,12 @@ def record_swipe(
         couple: The couple context.
         name_id: UUID of the name being swiped.
         action: One of 'like', 'dislike', 'maybe'.
-        deck_id: Optional UUID of the source recommendation deck.
+        source_deck: Optional source recommendation deck.
 
     Returns:
         Tuple of (Swipe instance, created: bool).
         created=False means a duplicate was found and returned.
     """
-    # Resolve the source deck if provided
-    source_deck = None
-    if deck_id:
-        source_deck = RecommendationDeck.objects.filter(
-            id=deck_id, couple=couple
-        ).first()
-
     # Try to create; handle duplicate gracefully
     try:
         with transaction.atomic():

@@ -1,4 +1,4 @@
-"""Unit tests for recommendation service (mock Qdrant + Bedrock Nova)."""
+"""Unit tests for recommendation service (mock Qdrant + Bedrock Titan)."""
 
 import uuid
 from types import SimpleNamespace
@@ -23,6 +23,7 @@ from core.services.recommendations import (
     _get_excluded_name_ids,
     _rerank_candidates,
     generate_deck,
+    get_cached_deck,
 )
 
 User = get_user_model()
@@ -364,34 +365,63 @@ class TestRerankCandidates:
         assert [candidate["name_id"] for candidate in ranked[:2]] == ["aaron", "blair"]
 
 
-class TestFreshDeckGeneration:
-    """Tests for always-fresh deck generation semantics."""
+class TestDeckCaching:
+    """Tests for reusable unexpired deck lookup."""
 
-    @patch("core.services.recommendations.search_names")
-    @patch("core.services.recommendations.build_couple_query_embedding")
-    def test_unexpired_deck_still_generates_new_deck(
-        self, mock_embedding, mock_search, couple_with_onboarding, sample_names
-    ):
-        """An existing unexpired deck does not suppress fresh generation."""
+    def test_unexpired_deck_with_items_is_cached(self, couple_with_onboarding, sample_names):
+        """An existing unexpired deck with items is reusable."""
         couple, _, _ = couple_with_onboarding
 
-        # Create an existing unexpired deck
         existing_deck = RecommendationDeck.objects.create(
             couple=couple,
             mode="best_match",
             retrieval_profile_json={},
             expires_at=timezone.now() + timezone.timedelta(days=3),
         )
+        existing_deck.items.create(name=sample_names[0], rank=1)
 
-        mock_embedding.return_value = [0.1] * 1024
-        candidates = [_make_qdrant_candidate(n, 0.9 - i * 0.1) for i, n in enumerate(sample_names)]
-        mock_search.return_value = candidates
+        assert get_cached_deck(couple, mode="best_match") == existing_deck
 
-        result = generate_deck(couple, mode="best_match")
+    def test_unexpired_empty_deck_is_not_cached(self, couple_with_onboarding):
+        """Empty decks are ignored so callers can regenerate usable recommendations."""
+        couple, _, _ = couple_with_onboarding
+        RecommendationDeck.objects.create(
+            couple=couple,
+            mode="best_match",
+            retrieval_profile_json={},
+            expires_at=timezone.now() + timezone.timedelta(days=3),
+        )
 
-        assert result.id != existing_deck.id
-        mock_embedding.assert_called_once()
-        mock_search.assert_called_once()
+        assert get_cached_deck(couple, mode="best_match") is None
+
+    def test_fully_swiped_deck_is_not_cached(self, couple_with_onboarding, sample_names):
+        """Cached decks are ignored after all of their items have been swiped."""
+        couple, user_a, _ = couple_with_onboarding
+        deck = RecommendationDeck.objects.create(
+            couple=couple,
+            mode="best_match",
+            retrieval_profile_json={},
+            expires_at=timezone.now() + timezone.timedelta(days=3),
+        )
+        deck.items.create(name=sample_names[0], rank=1)
+        Swipe.objects.create(couple=couple, user=user_a, name=sample_names[0], action=SwipeAction.LIKE)
+
+        assert get_cached_deck(couple, mode="best_match") is None
+
+    def test_partially_swiped_deck_is_cached(self, couple_with_onboarding, sample_names):
+        """Cached decks remain usable while at least one item is unswiped."""
+        couple, user_a, _ = couple_with_onboarding
+        deck = RecommendationDeck.objects.create(
+            couple=couple,
+            mode="best_match",
+            retrieval_profile_json={},
+            expires_at=timezone.now() + timezone.timedelta(days=3),
+        )
+        deck.items.create(name=sample_names[0], rank=1)
+        deck.items.create(name=sample_names[1], rank=2)
+        Swipe.objects.create(couple=couple, user=user_a, name=sample_names[0], action=SwipeAction.LIKE)
+
+        assert get_cached_deck(couple, mode="best_match") == deck
 
     @patch("core.services.recommendations.search_names")
     @patch("core.services.recommendations.build_couple_query_embedding")

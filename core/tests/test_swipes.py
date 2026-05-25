@@ -10,6 +10,8 @@ from core.models import (
     CoupleStatus,
     MatchStatus,
     Name,
+    RecommendationDeck,
+    RecommendationDeckItem,
     Swipe,
     SwipeAction,
 )
@@ -18,6 +20,7 @@ from core.services.swipes import (
     check_mutual_match,
     create_match,
     record_swipe,
+    validate_source_deck,
     validate_swipe,
 )
 
@@ -145,16 +148,60 @@ class TestRecordSwipe:
         assert created_b is True
         assert swipe_a.id != swipe_b.id
 
-    def test_swipe_with_deck_id(self, couple_with_users, sample_name):
-        """Swipe with a deck_id that doesn't exist still works (source_deck=None)."""
+    def test_swipe_with_source_deck(self, couple_with_users, sample_name):
+        """Swipe can store a source deck after provenance validation."""
         couple, user_a, _ = couple_with_users
-        import uuid
+        deck = RecommendationDeck.objects.create(couple=couple, mode="best_match")
+        RecommendationDeckItem.objects.create(deck=deck, name=sample_name, rank=1)
 
-        fake_deck_id = str(uuid.uuid4())
-        swipe, created = record_swipe(user_a, couple, str(sample_name.id), "maybe", deck_id=fake_deck_id)
+        source_deck = validate_source_deck(couple, str(sample_name.id), str(deck.id))
+        swipe, created = record_swipe(user_a, couple, str(sample_name.id), "maybe", source_deck=source_deck)
 
         assert created is True
-        assert swipe.source_deck is None
+        assert swipe.source_deck == deck
+
+    def test_invalid_deck_id_rejected(self, couple_with_users, sample_name):
+        """A provided deck_id must resolve to the couple and name."""
+        couple, _, _ = couple_with_users
+        import uuid
+
+        with pytest.raises(SwipeValidationError, match="Deck not found"):
+            validate_source_deck(couple, str(sample_name.id), str(uuid.uuid4()))
+
+    def test_deck_from_other_couple_rejected(self, couple_with_users, sample_name, db):
+        """A deck from another couple cannot be used as swipe provenance."""
+        couple, _, _ = couple_with_users
+        other_a = User.objects.create_user(email="other-a@test.com", password="testpass123")
+        other_b = User.objects.create_user(email="other-b@test.com", password="testpass123")
+        other_couple = Couple.objects.create(user_a=other_a, user_b=other_b, status=CoupleStatus.ACTIVE)
+        other_deck = RecommendationDeck.objects.create(couple=other_couple, mode="best_match")
+        RecommendationDeckItem.objects.create(deck=other_deck, name=sample_name, rank=1)
+
+        with pytest.raises(SwipeValidationError, match="Deck not found"):
+            validate_source_deck(couple, str(sample_name.id), str(other_deck.id))
+
+    def test_name_not_in_deck_rejected(self, couple_with_users, sample_name, db):
+        """A valid couple deck must contain the submitted name."""
+        couple, _, _ = couple_with_users
+        other_name = Name.objects.create(
+            canonical_name="OtherDeckName",
+            display_name="Other Deck Name",
+            gender_usage=["girl"],
+            origin_backgrounds=["English"],
+            languages=["en"],
+            scripts=["Latin"],
+            variants=[],
+            length_category="short",
+            age_style_category="modern",
+            historical_significance_score=0.2,
+            semantic_summary="Another deck name.",
+            active=True,
+        )
+        deck = RecommendationDeck.objects.create(couple=couple, mode="best_match")
+        RecommendationDeckItem.objects.create(deck=deck, name=other_name, rank=1)
+
+        with pytest.raises(SwipeValidationError, match="Deck not found"):
+            validate_source_deck(couple, str(sample_name.id), str(deck.id))
 
 
 class TestCheckMutualMatch:

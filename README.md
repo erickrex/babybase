@@ -122,7 +122,7 @@ Then build the Qdrant collection and index all active names using Titan Embed V2
 uv run python manage.py index_names_to_qdrant --force-recreate
 ```
 
-Use `--force-recreate` the first time, after changing embedding models, after changing vector dimensions, or when replacing a stale Qdrant collection. It deletes local vector refs for the configured collection, recreates the Qdrant collection, and clears stored user taste vectors so they can be recomputed against the current 1024-dimensional Nova vectors.
+Use `--force-recreate` the first time, after changing embedding models, after changing vector dimensions, or when replacing a stale Qdrant collection. It deletes local vector refs for the configured collection, recreates the Qdrant collection, and clears stored user taste vectors so they can be recomputed against the current 1024-dimensional Titan vectors.
 
 For normal incremental indexing after adding new names:
 
@@ -226,7 +226,7 @@ uv run python manage.py shell -c "from core.models import NameVectorIndexRef; pr
 |----------|---------|-------------|
 | `VITE_API_BASE_URL` | `http://localhost:8000/api/v1` | Backend API URL |
 
-## Nova and Qdrant Operations
+## Titan and Qdrant Operations
 
 ### Embedding model contract
 

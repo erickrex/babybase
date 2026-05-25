@@ -81,12 +81,28 @@ describe('OnboardingGuard', () => {
     expect(container.querySelector('.animate-spin')).toBeInTheDocument();
   });
 
-  it('redirects to /onboarding/partner when user has no couple', () => {
+  it('redirects to /onboarding/preferences when user has no couple and no solo onboarding', () => {
     mockedUseCouple.mockReturnValue(makeContextValue());
 
     renderWithRouter('/deck');
-    expect(screen.getByTestId('partner-page')).toBeInTheDocument();
+    expect(screen.getByTestId('preferences-page')).toBeInTheDocument();
     expect(screen.queryByTestId('deck-content')).not.toBeInTheDocument();
+  });
+
+  it('renders children when solo onboarding is complete', () => {
+    mockedUseCouple.mockReturnValue(makeContextValue({
+      coupleState: {
+        hasCouple: false,
+        couple: null,
+        partner: null,
+        onboardingComplete: { user: true, partner: false },
+      },
+    }));
+
+    renderWithRouter('/deck');
+    expect(screen.getByTestId('deck-content')).toBeInTheDocument();
+    expect(screen.queryByTestId('partner-page')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('preferences-page')).not.toBeInTheDocument();
   });
 
   it('redirects to /onboarding/preferences when user has couple but incomplete preferences', () => {
@@ -120,11 +136,11 @@ describe('OnboardingGuard', () => {
     expect(screen.queryByTestId('preferences-page')).not.toBeInTheDocument();
   });
 
-  it('redirects /matches to /onboarding/partner when no couple', () => {
+  it('redirects /matches to /onboarding/preferences when no couple and no solo onboarding', () => {
     mockedUseCouple.mockReturnValue(makeContextValue());
 
     renderWithRouter('/matches');
-    expect(screen.getByTestId('partner-page')).toBeInTheDocument();
+    expect(screen.getByTestId('preferences-page')).toBeInTheDocument();
     expect(screen.queryByTestId('matches-content')).not.toBeInTheDocument();
   });
 
@@ -143,11 +159,11 @@ describe('OnboardingGuard', () => {
     expect(screen.queryByTestId('shortlist-content')).not.toBeInTheDocument();
   });
 
-  it('redirects /map to /onboarding/partner when no couple', () => {
+  it('redirects /map to /onboarding/preferences when no couple and no solo onboarding', () => {
     mockedUseCouple.mockReturnValue(makeContextValue());
 
     renderWithRouter('/map');
-    expect(screen.getByTestId('partner-page')).toBeInTheDocument();
+    expect(screen.getByTestId('preferences-page')).toBeInTheDocument();
     expect(screen.queryByTestId('map-content')).not.toBeInTheDocument();
   });
 

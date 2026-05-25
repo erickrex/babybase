@@ -9,5 +9,5 @@ new BedrockAccessStack(app, 'BabyBaseBedrockAccessStack', {
   env: {
     region: app.node.tryGetContext('region') || 'us-east-1',
   },
-  description: 'IAM role for BabyBase to invoke Bedrock Nova Embed model',
+  description: 'IAM role for BabyBase to invoke Bedrock Titan Embed V2 model',
 });

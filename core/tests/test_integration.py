@@ -217,7 +217,7 @@ class TestPartnerInviteSignupFlow:
 
 
 class TestDeckGenerationPipeline:
-    """Integration test: Full deck generation pipeline (mock Qdrant + Bedrock Nova)."""
+    """Integration test: Full deck generation pipeline (mock Qdrant + Bedrock Titan)."""
 
     @patch("core.services.recommendations.search_names")
     @patch("core.services.recommendations.build_couple_query_embedding")

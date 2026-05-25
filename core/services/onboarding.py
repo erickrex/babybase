@@ -192,6 +192,34 @@ def _get_liked_vectors_for_user(couple: Couple, user) -> list[list[float]]:
 # ---------------------------------------------------------------------------
 
 
+def check_gender_conflict(couple: Couple, user: "User", incoming_gender: str) -> str | None:
+    """Return an error message when partner gender preferences conflict."""
+    partner = couple.user_b if couple.user_a == user else couple.user_a
+    if not partner:
+        return None
+
+    partner_onboarding = OnboardingResponse.objects.filter(user=partner, couple=couple).first()
+    if not partner_onboarding:
+        return None
+
+    partner_gender = partner_onboarding.baby_gender_preference
+    if {incoming_gender, partner_gender} != {"boy", "girl"}:
+        return None
+
+    logger.warning(
+        "Gender conflict: user=%s chose %s but partner=%s chose %s",
+        user.email,
+        incoming_gender,
+        partner.email,
+        partner_gender,
+    )
+    return (
+        "Your partner selected a different baby gender. "
+        "One of you chose boy and the other chose girl. "
+        "Please confirm with your partner and try again."
+    )
+
+
 def save_preferences(user: "User", couple: Couple | None, answers: dict) -> OnboardingResponse:
     """
     Store onboarding preferences for a user.

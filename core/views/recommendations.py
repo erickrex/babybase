@@ -9,31 +9,49 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from core.models import Couple, CoupleStatus, OnboardingResponse, RecommendationDeck
+from core.models import RecommendationDeck
 from core.serializers.recommendations import (
     DeckItemSerializer,
     GenerateDeckSerializer,
 )
 from core.services.couples import get_couple_for_user
-from core.services.recommendations import generate_deck
+from core.services.recommendations import DeckEligibilityError, generate_deck, get_cached_deck, prepare_couple_for_deck
 from core.services.taste_drift import compute_taste_drift
 
 logger = logging.getLogger(__name__)
 
 
-def _get_or_create_solo_couple(user) -> Couple:
-    """Create a solo active couple for a user who skipped partner invite."""
-    couple = Couple.objects.create(
-        user_a=user,
-        user_b=None,
-        status=CoupleStatus.ACTIVE,
-    )
-    # Associate any solo onboarding responses with the new couple
-    updated = OnboardingResponse.objects.filter(user=user, couple=None).update(couple=couple)
-    if updated:
-        logger.info("Associated %d solo onboarding response(s) with new solo couple=%s", updated, couple.id)
-    logger.info("Created solo couple: couple=%s user=%s", couple.id, user.email)
-    return couple
+def _serialize_deck(
+    deck: RecommendationDeck,
+    *,
+    cached: bool,
+    include_drift: bool = False,
+    exclude_swiped: bool = False,
+) -> dict:
+    """Serialize a recommendation deck response payload."""
+    deck_items = deck.items.select_related("name").order_by("rank")
+    if exclude_swiped:
+        swiped_name_ids = deck.couple.swipes.values_list("name_id", flat=True).distinct()
+        deck_items = deck_items.exclude(name_id__in=swiped_name_ids)
+
+    response_data = {
+        "id": str(deck.id),
+        "mode": deck.mode,
+        "created_at": deck.created_at.isoformat(),
+        "expires_at": deck.expires_at.isoformat() if deck.expires_at else None,
+        "cached": cached,
+        "items": DeckItemSerializer(deck_items, many=True).data,
+    }
+
+    if include_drift:
+        drift = compute_taste_drift(deck.couple)
+        if drift.get("summary"):
+            response_data["taste_drift"] = {
+                "summary": drift["summary"],
+                "converging_traits": drift["converging_traits"],
+            }
+
+    return response_data
 
 
 @api_view(["POST"])
@@ -62,49 +80,24 @@ def generate_deck_view(request: Request) -> Response:
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Validate couple is active (or create solo couple for solo users)
-    couple = get_couple_for_user(request.user)
-    if not couple:
-        # Solo user — check they completed onboarding, then create a solo couple
-        has_onboarding = OnboardingResponse.objects.filter(user=request.user, couple=None).exists()
-        if not has_onboarding:
-            return Response(
-                {"status": "error", "message": "You must complete onboarding before generating a deck."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        couple = _get_or_create_solo_couple(request.user)
+    mode = serializer.validated_data.get("mode", "best_match")
+    force_refresh = serializer.validated_data.get("force_refresh", False)
 
-    if couple.status != "active":
+    try:
+        couple = prepare_couple_for_deck(request.user)
+    except DeckEligibilityError as exc:
         return Response(
-            {"status": "error", "message": "Your couple must be active to generate a deck."},
+            {"status": "error", "message": str(exc)},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # For couples with a partner, both must have onboarded
-    if couple.user_b is not None:
-        onboarded_user_ids = set(
-            OnboardingResponse.objects.filter(couple=couple, user_id__in=[couple.user_a_id, couple.user_b_id])
-            .values_list("user_id", flat=True)
-            .distinct()
-        )
-        required_user_ids = {couple.user_a_id, couple.user_b_id}
-        if onboarded_user_ids != required_user_ids:
+    if not force_refresh:
+        cached_deck = get_cached_deck(couple, mode)
+        if cached_deck:
             return Response(
-                {
-                    "status": "error",
-                    "message": "Both partners must complete onboarding before generating a deck.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+                {"status": "success", "data": _serialize_deck(cached_deck, cached=True, exclude_swiped=True)},
+                status=status.HTTP_200_OK,
             )
-    else:
-        # Solo couple — just verify user_a has onboarded
-        if not OnboardingResponse.objects.filter(couple=couple, user=request.user).exists():
-            return Response(
-                {"status": "error", "message": "You must complete onboarding before generating a deck."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-    mode = serializer.validated_data.get("mode", "best_match")
 
     # Generate the deck
     logger.info("Generating deck: couple=%s mode=%s", couple.id, mode)
@@ -123,32 +116,10 @@ def generate_deck_view(request: Request) -> Response:
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    # Compute taste drift insight
-    drift = compute_taste_drift(couple)
-
-    # Serialize response
-    deck_items = deck.items.select_related("name").order_by("rank")
-    items_data = DeckItemSerializer(deck_items, many=True).data
-
-    response_data = {
-        "id": str(deck.id),
-        "mode": deck.mode,
-        "created_at": deck.created_at.isoformat(),
-        "expires_at": deck.expires_at.isoformat() if deck.expires_at else None,
-        "items": items_data,
-    }
-
-    # Include drift insight if available
-    if drift.get("summary"):
-        response_data["taste_drift"] = {
-            "summary": drift["summary"],
-            "converging_traits": drift["converging_traits"],
-        }
-
     return Response(
         {
             "status": "success",
-            "data": response_data,
+            "data": _serialize_deck(deck, cached=False, include_drift=True),
         },
         status=status.HTTP_201_CREATED,
     )
@@ -181,19 +152,10 @@ def get_deck_view(request: Request, deck_id: str) -> Response:
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    deck_items = deck.items.select_related("name").order_by("rank")
-    items_data = DeckItemSerializer(deck_items, many=True).data
-
     return Response(
         {
             "status": "success",
-            "data": {
-                "id": str(deck.id),
-                "mode": deck.mode,
-                "created_at": deck.created_at.isoformat(),
-                "expires_at": deck.expires_at.isoformat() if deck.expires_at else None,
-                "items": items_data,
-            },
+            "data": _serialize_deck(deck, cached=True),
         },
         status=status.HTTP_200_OK,
     )
