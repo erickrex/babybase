@@ -10,7 +10,6 @@ from qdrant_client.models import (
     Filter,
     HasIdCondition,
     MatchValue,
-    NamedVector,
     SearchParams,
 )
 
@@ -111,14 +110,15 @@ def search_names(
         else:
             query_filter.must_not.append(exclude_condition)
 
-    results = client.search(
+    results = client.query_points(
         collection_name=settings.QDRANT_COLLECTION,
-        query_vector=NamedVector(name=vector_name, vector=embedding),
+        query=embedding,
+        using=vector_name,
         query_filter=query_filter,
         limit=limit,
         with_payload=True,
         search_params=SearchParams(exact=False, hnsw_ef=128),
-    )
+    ).points
 
     output = []
     for hit in results:

@@ -75,7 +75,8 @@ class TestSearchNames:
         from core.services.qdrant_client import search_names
 
         mock_client = mock_get_client.return_value
-        mock_client.search.return_value = []
+        mock_response = mock_client.query_points.return_value
+        mock_response.points = []
 
         search_names(
             embedding=[0.0] * 1024,
@@ -84,7 +85,7 @@ class TestSearchNames:
             exclude_ids=["point-a", "point-b"],
         )
 
-        query_filter = mock_client.search.call_args.kwargs["query_filter"]
+        query_filter = mock_client.query_points.call_args.kwargs["query_filter"]
         assert query_filter.must_not is not None
         assert query_filter.must_not[0].has_id == ["point-a", "point-b"]
 
