@@ -98,3 +98,37 @@ class TestSearchNames:
             search_names(embedding=[0.0] * 1536)
 
         mock_get_client.assert_not_called()
+
+    @override_settings(QDRANT_COLLECTION="test_names")
+    @patch("core.services.qdrant_client.get_qdrant_client")
+    def test_uses_query_points_not_legacy_search(self, mock_get_client):
+        """
+        Regression: qdrant-client 1.17 removed the legacy client.search() method.
+        search_names() must use the new query_points() API with the named vector
+        passed via 'using=' rather than wrapping the embedding in NamedVector.
+        """
+        from core.services.qdrant_client import search_names
+
+        mock_client = mock_get_client.return_value
+        mock_client.query_points.return_value.points = []
+
+        search_names(
+            embedding=[0.0] * 1024,
+            filters={"active": True, "gender_usage": "boy"},
+            limit=5,
+            vector_name="semantic",
+        )
+
+        # The new API must have been called
+        mock_client.query_points.assert_called_once()
+        call_kwargs = mock_client.query_points.call_args.kwargs
+
+        # Embedding is passed as `query`, not `query_vector`
+        assert call_kwargs["query"] == [0.0] * 1024
+        # Named vector is selected via `using`, not wrapped in NamedVector
+        assert call_kwargs["using"] == "semantic"
+        assert call_kwargs["collection_name"] == "test_names"
+        assert call_kwargs["limit"] == 5
+
+        # The legacy method must NOT have been called
+        mock_client.search.assert_not_called()

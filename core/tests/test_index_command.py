@@ -199,3 +199,82 @@ def test_index_batch_replaces_stale_refs_and_points(mock_generate_embeddings, db
     ref = NameVectorIndexRef.objects.get(name=name)
     assert ref.embedding_version == EMBEDDING_VERSION
     assert ref.qdrant_collection == COLLECTION_NAME
+
+
+@patch("core.management.commands.index_names_to_qdrant.get_qdrant_client")
+def test_collection_creation_creates_payload_indexes(mock_get_client):
+    """
+    When creating a new collection, payload indexes must be created for all
+    fields used in filters (active, gender_usage, length_category, age_style_category).
+    Without these indexes, Qdrant rejects filtered query_points calls with a
+    400 'Index required but not found' error.
+    """
+    from django.core.management import call_command
+    from qdrant_client.models import PayloadSchemaType
+
+    mock_client = MagicMock()
+    mock_get_client.return_value = mock_client
+
+    mock_collections_response = MagicMock()
+    mock_collections_response.collections = []
+    mock_client.get_collections.return_value = mock_collections_response
+
+    with patch("core.management.commands.index_names_to_qdrant.Name") as mock_name_model:
+        mock_qs = MagicMock()
+        mock_qs.filter.return_value.exclude.return_value = []
+        mock_name_model.objects = mock_qs
+
+        with patch("core.management.commands.index_names_to_qdrant.NameVectorIndexRef") as mock_ref:
+            mock_ref.objects.filter.return_value.values_list.return_value = []
+            mock_ref.objects.filter.return_value.delete.return_value = (0, {})
+            call_command("index_names_to_qdrant")
+
+    # Verify create_payload_index was called for each filter-able field
+    indexed_calls = mock_client.create_payload_index.call_args_list
+    indexed_fields = {call.kwargs["field_name"]: call.kwargs["field_schema"] for call in indexed_calls}
+
+    assert "active" in indexed_fields
+    assert indexed_fields["active"] == PayloadSchemaType.BOOL
+
+    assert "gender_usage" in indexed_fields
+    assert indexed_fields["gender_usage"] == PayloadSchemaType.KEYWORD
+
+    assert "length_category" in indexed_fields
+    assert indexed_fields["length_category"] == PayloadSchemaType.KEYWORD
+
+    assert "age_style_category" in indexed_fields
+    assert indexed_fields["age_style_category"] == PayloadSchemaType.KEYWORD
+
+    assert mock_client.create_payload_index.call_count == 4
+
+
+@patch("core.management.commands.index_names_to_qdrant.get_qdrant_client")
+def test_payload_index_creation_failures_do_not_abort(mock_get_client):
+    """
+    If a payload index already exists or fails to create, the command should
+    log a warning but continue rather than aborting the whole operation.
+    """
+    from django.core.management import call_command
+
+    mock_client = MagicMock()
+    mock_get_client.return_value = mock_client
+    mock_client.create_payload_index.side_effect = Exception("index already exists")
+
+    mock_collections_response = MagicMock()
+    mock_collections_response.collections = []
+    mock_client.get_collections.return_value = mock_collections_response
+
+    with patch("core.management.commands.index_names_to_qdrant.Name") as mock_name_model:
+        mock_qs = MagicMock()
+        mock_qs.filter.return_value.exclude.return_value = []
+        mock_name_model.objects = mock_qs
+
+        with patch("core.management.commands.index_names_to_qdrant.NameVectorIndexRef") as mock_ref:
+            mock_ref.objects.filter.return_value.values_list.return_value = []
+            mock_ref.objects.filter.return_value.delete.return_value = (0, {})
+
+            # Should not raise even though create_payload_index always fails
+            call_command("index_names_to_qdrant")
+
+    # All four index creation attempts were made
+    assert mock_client.create_payload_index.call_count == 4
