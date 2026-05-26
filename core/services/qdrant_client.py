@@ -29,7 +29,11 @@ def get_qdrant_client() -> QdrantClient:
         if not url:
             raise ImproperlyConfigured("QDRANT_URL must be set in Django settings.")
         logger.info("Initializing Qdrant client: url=%s", url)
-        _client = QdrantClient(url=url, api_key=api_key)
+        _client = QdrantClient(
+            url=url,
+            api_key=api_key,
+            timeout=getattr(settings, "QDRANT_TIMEOUT_SECONDS", 60),
+        )
     return _client
 
 

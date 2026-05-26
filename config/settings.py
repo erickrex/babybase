@@ -153,6 +153,7 @@ CORS_ALLOW_CREDENTIALS = True
 QDRANT_URL = config("QDRANT_URL", default="")
 QDRANT_API_KEY = config("QDRANT_API_KEY", default="")
 QDRANT_COLLECTION = config("QDRANT_COLLECTION", default="names_global_v1")
+QDRANT_TIMEOUT_SECONDS = config("QDRANT_TIMEOUT_SECONDS", default=180, cast=int)
 
 # AWS Bedrock Configuration
 AWS_BEDROCK_REGION = config("AWS_BEDROCK_REGION", default="us-east-1")

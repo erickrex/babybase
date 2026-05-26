@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 EMBEDDING_VERSION = "titan-embed-text-v2"
 COLLECTION_NAME = "names_global_v1"
 VECTOR_DIM = EMBEDDING_DIM
-BATCH_SIZE = 20
+DEFAULT_BATCH_SIZE = 10
 
 
 class Command(BaseCommand):
@@ -39,10 +39,17 @@ class Command(BaseCommand):
                 "and clear UserTasteVector records."
             ),
         )
+        parser.add_argument(
+            "--batch-size",
+            type=int,
+            default=DEFAULT_BATCH_SIZE,
+            help=f"Number of names to embed and upsert per batch (default: {DEFAULT_BATCH_SIZE}).",
+        )
 
     def handle(self, *args, **options):
         client = get_qdrant_client()
         force_recreate = options["force_recreate"]
+        batch_size = max(options["batch_size"], 1)
         self.collection_name = settings.QDRANT_COLLECTION
 
         if force_recreate:
@@ -62,8 +69,8 @@ class Command(BaseCommand):
 
         # Step 3: Process in batches
         total_indexed = 0
-        for i in range(0, len(names_to_index), BATCH_SIZE):
-            batch = names_to_index[i : i + BATCH_SIZE]
+        for i in range(0, len(names_to_index), batch_size):
+            batch = names_to_index[i : i + batch_size]
             self._index_batch(client, batch)
             total_indexed += len(batch)
             self.stdout.write(f"  Indexed {total_indexed}/{len(names_to_index)}...")

@@ -110,10 +110,11 @@ uv run python manage.py migrate
 
 ### 5. Seed and index names
 
-Seed the relational name metadata first:
+Seed the relational name metadata first. This uses bundled SSA-derived CSV files in
+`core/fixtures/` so new databases do not depend on network access for the name list:
 
 ```bash
-uv run python manage.py seed_names
+uv run python manage.py seed_real_names
 ```
 
 Then build the Qdrant collection and index all active names using Titan Embed V2:
@@ -131,10 +132,15 @@ uv run python manage.py index_names_to_qdrant
 ```
 
 The command uses `QDRANT_COLLECTION` from `.env`. The default is `names_global_v1`.
+If Qdrant Cloud writes are slow or timing out, lower the batch size:
+
+```bash
+uv run python manage.py index_names_to_qdrant --batch-size 5
+```
 
 ### 6. Optional demo data
 
-After `seed_names`, you can create a demo active couple with onboarding, swipes, and matches:
+After `seed_real_names`, you can create a demo active couple with onboarding, swipes, and matches:
 
 ```bash
 uv run python manage.py seed_demo --reset
@@ -216,6 +222,7 @@ uv run python manage.py shell -c "from core.models import NameVectorIndexRef; pr
 | `QDRANT_URL` | - | Qdrant instance URL |
 | `QDRANT_API_KEY` | - | Qdrant API key |
 | `QDRANT_COLLECTION` | `names_global_v1` | Qdrant collection queried and indexed by the app |
+| `QDRANT_TIMEOUT_SECONDS` | `180` | Qdrant client timeout for search and indexing requests |
 | `AWS_BEDROCK_REGION` | `us-east-1` | AWS region for Bedrock Runtime API |
 | `LOG_LEVEL` | `INFO` | Logging level for `core` logger |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Allowed CORS origins |
@@ -269,6 +276,8 @@ Command:
 ```bash
 uv run python manage.py index_names_to_qdrant
 ```
+
+Use `--batch-size 5` or another small value when indexing into a slow remote Qdrant instance.
 
 ### Empty deck troubleshooting
 

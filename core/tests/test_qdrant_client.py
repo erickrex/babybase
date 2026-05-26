@@ -10,7 +10,11 @@ from django.test import override_settings
 class TestGetQdrantClientSingleton:
     """Tests for get_qdrant_client() singleton pattern."""
 
-    @override_settings(QDRANT_URL="http://localhost:6333", QDRANT_API_KEY="test-key")
+    @override_settings(
+        QDRANT_URL="http://localhost:6333",
+        QDRANT_API_KEY="test-key",
+        QDRANT_TIMEOUT_SECONDS=42,
+    )
     @patch("core.services.qdrant_client.QdrantClient")
     def test_returns_same_instance_on_repeated_calls(self, mock_qdrant_class):
         """get_qdrant_client() should return the same instance on repeated calls."""
@@ -24,7 +28,11 @@ class TestGetQdrantClientSingleton:
 
         assert first is second
         # QdrantClient constructor should only be called once
-        mock_qdrant_class.assert_called_once_with(url="http://localhost:6333", api_key="test-key")
+        mock_qdrant_class.assert_called_once_with(
+            url="http://localhost:6333",
+            api_key="test-key",
+            timeout=42,
+        )
 
         # Cleanup
         module._client = None
