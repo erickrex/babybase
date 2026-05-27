@@ -238,6 +238,7 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
     final_candidates = _apply_diversity_constraints(
         ranked_candidates, deck_size=DECK_SIZE, relaxed=sparse_pool
     )
+    final_candidates = _interleave_by_first_letter(final_candidates)
 
     # Compute quality metrics for logging
     user_a_confidence = 0.0
@@ -576,6 +577,34 @@ def _apply_diversity_constraints(
         selected.extend(remaining[: deck_size - len(selected)])
 
     return selected
+
+
+def _interleave_by_first_letter(candidates: list[dict]) -> list[dict]:
+    """Return candidates in rounds by first letter while preserving rank within each letter."""
+    grouped_candidates: dict[str, list[dict]] = {}
+    for candidate in candidates:
+        payload = candidate.get("payload", {})
+        name = payload.get("canonical_name", "")
+        first_letter = name[0].upper() if name else ""
+        grouped_candidates.setdefault(first_letter, []).append(candidate)
+
+    interleaved: list[dict] = []
+    while grouped_candidates:
+        letters_by_next_score = sorted(
+            grouped_candidates,
+            key=lambda letter: (
+                grouped_candidates[letter][0].get("rerank_score", 0.0),
+                grouped_candidates[letter][0].get("retrieval_score", 0.0),
+                grouped_candidates[letter][0].get("payload", {}).get("canonical_name", ""),
+            ),
+            reverse=True,
+        )
+        for letter in letters_by_next_score:
+            interleaved.append(grouped_candidates[letter].pop(0))
+            if not grouped_candidates[letter]:
+                del grouped_candidates[letter]
+
+    return interleaved
 
 
 def _persist_deck(

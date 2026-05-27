@@ -21,6 +21,7 @@ from core.services.recommendations import (
     _apply_diversity_constraints,
     _build_payload_filters,
     _get_excluded_name_ids,
+    _interleave_by_first_letter,
     _rerank_candidates,
     generate_deck,
     get_cached_deck,
@@ -270,6 +271,33 @@ class TestModeSelection:
 
         result = _apply_diversity_constraints(candidates, deck_size=50)
         assert len(result) == 2
+
+    def test_interleave_by_first_letter_breaks_runs_and_preserves_letter_order(self):
+        """Deck display order cycles through first letters while preserving intra-letter order."""
+        candidates = [
+            {
+                "rerank_score": 0.9 - i * 0.01,
+                "retrieval_score": 0.9 - i * 0.01,
+                "payload": {"canonical_name": name},
+            }
+            for i, name in enumerate(["Aaron", "Adam", "Andrew", "Benjamin", "Caleb", "Charles"])
+        ]
+
+        result = _interleave_by_first_letter(candidates)
+
+        assert [candidate["payload"]["canonical_name"] for candidate in result[:4]] == [
+            "Aaron",
+            "Benjamin",
+            "Caleb",
+            "Adam",
+        ]
+        a_names = [
+            candidate["payload"]["canonical_name"]
+            for candidate in result
+            if candidate["payload"]["canonical_name"].startswith("A")
+        ]
+
+        assert a_names == ["Aaron", "Adam", "Andrew"]
 
 
 class TestRerankCandidates:
