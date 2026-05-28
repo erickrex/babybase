@@ -1,6 +1,6 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { CoupleProvider } from './contexts/CoupleContext';
+import { CoupleProvider, useCouple } from './contexts/CoupleContext';
 import RegisterPage from './pages/auth/RegisterPage';
 import LoginPage from './pages/auth/LoginPage';
 import ProfilePage from './pages/onboarding/ProfilePage';
@@ -65,6 +65,12 @@ function AuthenticatedLayout({ children }: { children: ReactNode }) {
 /** Profile placeholder for the Profile tab */
 function ProfileTabPage() {
   const { user, logout } = useAuth();
+  const { coupleState } = useCouple();
+  const navigate = useNavigate();
+
+  const hasPartner = coupleState.partner !== null;
+  const hasPendingInvite =
+    !hasPartner && Boolean(coupleState.couple) && coupleState.couple?.status === 'pending';
 
   return (
     <div className="px-4 pt-6">
@@ -73,6 +79,31 @@ function ProfileTabPage() {
         <p className="text-text font-medium">{user?.email}</p>
         <p className="text-sm text-text-muted mt-1">{user?.first_name || 'No name set'}</p>
       </div>
+
+      {/* Partner / invite section */}
+      <div className="mt-6 bg-bg-card rounded-xl border border-border p-4 shadow-card">
+        <h2 className="text-sm font-semibold text-text mb-2">Your Partner</h2>
+        {hasPartner ? (
+          <p className="text-sm text-text-secondary">
+            Paired with {coupleState.partner?.first_name || coupleState.partner?.email}.
+          </p>
+        ) : (
+          <>
+            <p className="text-sm text-text-secondary mb-3">
+              {hasPendingInvite
+                ? 'Your invite is pending. Your partner will be connected once they sign up.'
+                : 'Invite your partner so you can swipe together and match on names.'}
+            </p>
+            <button
+              onClick={() => navigate('/onboarding/partner')}
+              className="w-full py-2.5 rounded-xl bg-primary text-white font-medium hover:bg-primary-dark transition-colors"
+            >
+              {hasPendingInvite ? 'Manage Invite' : 'Invite Partner'}
+            </button>
+          </>
+        )}
+      </div>
+
       <button
         onClick={() => {
           void logout();

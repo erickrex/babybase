@@ -45,8 +45,21 @@ def create_couple(user: "User", partner_email: str) -> Couple:
         if partner is not None:
             partner = locked_users.get(partner.id, partner)
 
-        # Enforce couple singleton: user can only be in one active couple
-        if has_active_couple(user):
+        if partner and partner.id == user.id:
+            raise CoupleExistsError("You cannot invite yourself.")
+
+        # A solo user who already started swiping has an active couple with no
+        # partner yet (user_b is None). Inviting a partner should attach to that
+        # existing couple so their swipe history carries over, not be rejected.
+        solo_couple = (
+            Couple.objects.select_for_update()
+            .filter(user_a=user, status=CoupleStatus.ACTIVE, user_b__isnull=True)
+            .first()
+        )
+
+        # Enforce couple singleton: reject only if the user is in a real
+        # two-person active couple.
+        if has_active_couple(user) and not solo_couple:
             raise CoupleExistsError("User is already in an active couple.")
 
         # Check for existing pending couple
@@ -58,6 +71,9 @@ def create_couple(user: "User", partner_email: str) -> Couple:
             if existing_pending.invite_email == normalized_email:
                 return existing_pending  # Return existing, don't duplicate
             raise CoupleExistsError("User already has a pending invite.")
+
+        if solo_couple:
+            return _attach_partner_to_solo_couple(solo_couple, user, partner, normalized_email)
 
         if partner:
             # Partner exists — check they're not already in an active couple
@@ -111,6 +127,58 @@ def create_couple(user: "User", partner_email: str) -> Couple:
             )
 
         return couple
+
+
+def _attach_partner_to_solo_couple(
+    solo_couple: Couple,
+    user: "User",
+    partner: "User | None",
+    normalized_email: str,
+) -> Couple:
+    """Attach a partner to an existing solo active couple (user_b is None).
+
+    Preserves the solo user's existing swipe history and onboarding.
+    - If the partner has an account: attach immediately as user_b (stays active).
+    - If the partner has no account: convert the solo couple to a pending invite.
+    """
+    if partner:
+        if has_active_couple(partner):
+            raise CoupleExistsError("Partner is already in an active couple.")
+
+        solo_couple.user_b = partner
+        solo_couple.invite_email = normalized_email
+        solo_couple.save(update_fields=["user_b", "invite_email", "updated_at"])
+        logger.info(
+            "Partner attached to solo couple: id=%s user_a=%s user_b=%s",
+            solo_couple.id,
+            user.email,
+            partner.email,
+        )
+
+        updated_partner = OnboardingResponse.objects.filter(user=partner, couple=None).update(
+            couple=solo_couple
+        )
+        if updated_partner:
+            logger.info(
+                "Associated %s solo onboarding response(s) for partner=%s with couple=%s",
+                updated_partner,
+                partner.email,
+                solo_couple.id,
+            )
+    else:
+        # Partner has no account yet. Keep the couple ACTIVE so the solo user
+        # can keep swiping, but record invite_email so the partner is connected
+        # automatically when they register.
+        solo_couple.invite_email = normalized_email
+        solo_couple.save(update_fields=["invite_email", "updated_at"])
+        logger.info(
+            "Solo couple recorded pending invite (stays active): id=%s user_a=%s invite=%s",
+            solo_couple.id,
+            user.email,
+            normalized_email,
+        )
+
+    return solo_couple
 
 
 def has_active_couple(user: "User") -> bool:
@@ -176,8 +244,15 @@ def connect_pending_invite(new_user: "User") -> Couple | None:
             .select_related("user_a")
             .filter(
                 invite_email=new_user.email.lower(),
-                status=CoupleStatus.PENDING,
+                status__in=[CoupleStatus.PENDING, CoupleStatus.ACTIVE],
                 user_b__isnull=True,
+            )
+            .order_by(
+                Case(
+                    When(status=CoupleStatus.PENDING, then=Value(0)),
+                    default=Value(1),
+                    output_field=IntegerField(),
+                )
             )
             .first()
         )

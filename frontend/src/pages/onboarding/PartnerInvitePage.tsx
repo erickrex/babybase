@@ -28,12 +28,14 @@ export default function PartnerInvitePage() {
 
     setIsLoading(true);
     try {
-      await syncAfterMutation(() =>
+      const { coupleState: nextState } = await syncAfterMutation(() =>
         api.post('/couples/invite/', {
           partner_email: partnerEmail.trim(),
         })
       );
-      navigate('/onboarding/preferences');
+      // Already-onboarded users (e.g. inviting from Profile) go to the deck;
+      // users still in initial onboarding continue to preferences.
+      navigate(nextState.onboardingComplete.user ? '/deck' : '/onboarding/preferences');
     } catch (err: unknown) {
       const error = err as { response?: { data?: { message?: string } } };
       const message = error.response?.data?.message || 'Failed to send invite. Please try again.';

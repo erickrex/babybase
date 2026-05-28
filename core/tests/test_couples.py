@@ -32,6 +32,85 @@ def user_c(db):
     return User.objects.create_user(email="charlie@example.com", password="testpass123")
 
 
+class TestSoloCoupleInvite:
+    """Tests for inviting a partner from an existing solo active couple."""
+
+    def _make_solo_couple(self, user):
+        """Create an active couple with no partner (solo swiping user)."""
+        return Couple.objects.create(
+            user_a=user,
+            user_b=None,
+            status=CoupleStatus.ACTIVE,
+        )
+
+    def test_solo_user_invites_existing_partner_attaches_to_same_couple(self, user_a, user_b):
+        """Inviting an existing user attaches them to the solo couple, preserving it."""
+        solo = self._make_solo_couple(user_a)
+
+        result = create_couple(user_a, user_b.email)
+
+        assert result.id == solo.id  # same couple, swipe history preserved
+        assert result.user_b == user_b
+        assert result.status == CoupleStatus.ACTIVE
+        assert result.invite_email == user_b.email
+
+    def test_solo_user_invites_existing_partner_associates_partner_onboarding(self, user_a, user_b):
+        """Partner's solo onboarding responses get linked to the couple."""
+        solo = self._make_solo_couple(user_a)
+        partner_response = OnboardingResponse.objects.create(
+            user=user_b,
+            couple=None,
+            preferred_name_backgrounds=["Spanish"],
+            preferred_name_age="balanced",
+            baby_gender_preference="girl",
+            preferred_name_length="any",
+            historical_importance="medium",
+        )
+
+        create_couple(user_a, user_b.email)
+        partner_response.refresh_from_db()
+
+        assert partner_response.couple_id == solo.id
+
+    def test_solo_user_invites_nonexistent_partner_stays_active_with_invite(self, user_a):
+        """Inviting a not-yet-registered partner keeps the couple active and records the email."""
+        solo = self._make_solo_couple(user_a)
+
+        result = create_couple(user_a, "future-partner@example.com")
+
+        assert result.id == solo.id
+        assert result.status == CoupleStatus.ACTIVE  # solo user keeps swiping
+        assert result.user_b is None
+        assert result.invite_email == "future-partner@example.com"
+
+    def test_pending_invite_connects_to_active_solo_couple_on_registration(self, user_a):
+        """When the invited partner registers, they connect to the active solo couple."""
+        solo = self._make_solo_couple(user_a)
+        create_couple(user_a, "late@example.com")
+
+        new_user = User.objects.create_user(email="late@example.com", password="testpass123")
+        connected = connect_pending_invite(new_user)
+
+        assert connected is not None
+        assert connected.id == solo.id
+        assert connected.user_b == new_user
+        assert connected.status == CoupleStatus.ACTIVE
+
+    def test_solo_user_cannot_invite_self(self, user_a):
+        """Inviting your own email is rejected."""
+        self._make_solo_couple(user_a)
+
+        with pytest.raises(CoupleExistsError, match="cannot invite yourself"):
+            create_couple(user_a, user_a.email)
+
+    def test_real_two_person_couple_still_rejects_new_invite(self, user_a, user_b, user_c):
+        """A user already paired with a partner cannot invite a third person."""
+        create_couple(user_a, user_b.email)  # real active couple
+
+        with pytest.raises(CoupleExistsError, match="already in an active couple"):
+            create_couple(user_a, user_c.email)
+
+
 class TestCreateCouple:
     """Tests for create_couple service function."""
 
