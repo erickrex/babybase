@@ -29,6 +29,10 @@ FALLBACK_SSA_NAMES_ZIP_URL = (
 )
 YEAR_FILE_RE = re.compile(r"yob(?P<year>\d{4})\.txt$")
 BUNDLED_CSV_PATHS = (
+    Path(__file__).resolve().parents[2] / "fixtures" / "ssa_2020_top500_boys_cultural_metadata.csv",
+    Path(__file__).resolve().parents[2] / "fixtures" / "ssa_2020_top500_girls_cultural_metadata.csv",
+)
+ENRICHED_BUNDLED_CSV_PATHS = (
     Path(__file__).resolve().parents[2] / "fixtures" / "ssa_2020_top500_boys_enriched.csv",
     Path(__file__).resolve().parents[2] / "fixtures" / "ssa_2020_top500_girls_enriched.csv",
 )
@@ -409,7 +413,9 @@ class Command(BaseCommand):
             stats = self._build_stats_from_zip_options(options)
         else:
             csv_paths = [Path(path) for path in (options["source_csv"] or BUNDLED_CSV_PATHS)]
-            # Fall back to legacy non-enriched CSVs if the enriched ones aren't present yet
+            # Cascade fallback: cultural_metadata -> enriched -> legacy
+            if not options["source_csv"] and not all(path.exists() for path in csv_paths):
+                csv_paths = [Path(path) for path in ENRICHED_BUNDLED_CSV_PATHS]
             if not options["source_csv"] and not all(path.exists() for path in csv_paths):
                 csv_paths = [Path(path) for path in LEGACY_BUNDLED_CSV_PATHS]
             missing_paths = [str(path) for path in csv_paths if not path.exists()]
