@@ -110,6 +110,106 @@ class TestSoloCoupleInvite:
         with pytest.raises(CoupleExistsError, match="already in an active couple"):
             create_couple(user_a, user_c.email)
 
+    def test_two_solo_swipers_merge_when_one_invites_the_other(self, user_a, user_b):
+        """Both partners swiped solo first; inviting merges them into one couple."""
+        from core.models import Name, Swipe
+
+        solo_a = self._make_solo_couple(user_a)
+        solo_b = self._make_solo_couple(user_b)
+
+        name = Name.objects.create(
+            canonical_name="MergeName",
+            display_name="Merge Name",
+            gender_usage=["boy"],
+            origin_backgrounds=["English"],
+            languages=["en"],
+            scripts=["Latin"],
+            variants=[],
+            length_category="short",
+            age_style_category="classic",
+            historical_significance_score=0.5,
+            semantic_summary="A test name.",
+            active=True,
+        )
+        # Each partner liked the same name in their own solo couple
+        Swipe.objects.create(couple=solo_a, user=user_a, name=name, action="like")
+        Swipe.objects.create(couple=solo_b, user=user_b, name=name, action="like")
+
+        result = create_couple(user_a, user_b.email)
+
+        # They end up in user_a's couple, partner attached
+        assert result.id == solo_a.id
+        assert result.user_b == user_b
+        assert result.status == CoupleStatus.ACTIVE
+
+        # Partner's solo couple is archived
+        solo_b.refresh_from_db()
+        assert solo_b.status == CoupleStatus.ARCHIVED
+
+        # Partner's swipe moved into the merged couple
+        assert Swipe.objects.filter(couple=result, user=user_b, name=name).exists()
+        assert not Swipe.objects.filter(couple=solo_b, user=user_b).exists()
+
+    def test_merge_preserves_both_partners_swipes_for_mutual_match(self, user_a, user_b):
+        """After merge, both partners' likes on the same name live in one couple."""
+        from core.models import Name, Swipe
+        from core.services.swipes import check_mutual_match
+
+        solo_a = self._make_solo_couple(user_a)
+        solo_b = self._make_solo_couple(user_b)
+
+        name = Name.objects.create(
+            canonical_name="MatchName",
+            display_name="Match Name",
+            gender_usage=["girl"],
+            origin_backgrounds=["English"],
+            languages=["en"],
+            scripts=["Latin"],
+            variants=[],
+            length_category="short",
+            age_style_category="classic",
+            historical_significance_score=0.5,
+            semantic_summary="A test name.",
+            active=True,
+        )
+        Swipe.objects.create(couple=solo_a, user=user_a, name=name, action="like")
+        Swipe.objects.create(couple=solo_b, user=user_b, name=name, action="like")
+
+        merged = create_couple(user_a, user_b.email)
+
+        # Both likes now in the same couple → mutual match detectable
+        assert check_mutual_match(merged, str(name.id)) is True
+
+    def test_invitee_with_solo_couple_when_inviter_has_none(self, user_a, user_b):
+        """Inviter never swiped (no solo couple) but invitee did; still merges cleanly."""
+        from core.models import Name, Swipe
+
+        solo_b = self._make_solo_couple(user_b)
+        name = Name.objects.create(
+            canonical_name="OneSideName",
+            display_name="One Side Name",
+            gender_usage=["boy"],
+            origin_backgrounds=["English"],
+            languages=["en"],
+            scripts=["Latin"],
+            variants=[],
+            length_category="short",
+            age_style_category="classic",
+            historical_significance_score=0.5,
+            semantic_summary="A test name.",
+            active=True,
+        )
+        Swipe.objects.create(couple=solo_b, user=user_b, name=name, action="like")
+
+        result = create_couple(user_a, user_b.email)
+
+        assert result.user_a == user_a
+        assert result.user_b == user_b
+        assert result.status == CoupleStatus.ACTIVE
+        solo_b.refresh_from_db()
+        assert solo_b.status == CoupleStatus.ARCHIVED
+        assert Swipe.objects.filter(couple=result, user=user_b, name=name).exists()
+
 
 class TestCreateCouple:
     """Tests for create_couple service function."""

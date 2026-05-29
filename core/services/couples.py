@@ -76,8 +76,13 @@ def create_couple(user: "User", partner_email: str) -> Couple:
             return _attach_partner_to_solo_couple(solo_couple, user, partner, normalized_email)
 
         if partner:
-            # Partner exists — check they're not already in an active couple
-            if has_active_couple(partner):
+            # Partner exists — check whether they already swiped solo.
+            partner_solo_couple = (
+                Couple.objects.select_for_update()
+                .filter(user_a=partner, status=CoupleStatus.ACTIVE, user_b__isnull=True)
+                .first()
+            )
+            if has_active_couple(partner) and not partner_solo_couple:
                 raise CoupleExistsError("Partner is already in an active couple.")
 
             # Connect immediately
@@ -94,7 +99,7 @@ def create_couple(user: "User", partner_email: str) -> Couple:
                 partner.email,
             )
 
-            # Associate solo onboarding responses with the newly formed couple
+            # Associate the inviter's solo onboarding with the new couple
             updated_user_a = OnboardingResponse.objects.filter(user=user, couple=None).update(couple=couple)
             if updated_user_a:
                 logger.info(
@@ -103,14 +108,22 @@ def create_couple(user: "User", partner_email: str) -> Couple:
                     user.email,
                     couple.id,
                 )
-            updated_user_b = OnboardingResponse.objects.filter(user=partner, couple=None).update(couple=couple)
-            if updated_user_b:
-                logger.info(
-                    "Associated %s solo onboarding response(s) for user_b=%s with couple=%s",
-                    updated_user_b,
-                    partner.email,
-                    couple.id,
+
+            # Bring over the partner's solo swipes/onboarding if they swiped alone,
+            # otherwise just link their solo onboarding response.
+            if partner_solo_couple:
+                _merge_solo_couple_into(partner_solo_couple, couple, partner)
+            else:
+                updated_user_b = OnboardingResponse.objects.filter(user=partner, couple=None).update(
+                    couple=couple
                 )
+                if updated_user_b:
+                    logger.info(
+                        "Associated %s solo onboarding response(s) for user_b=%s with couple=%s",
+                        updated_user_b,
+                        partner.email,
+                        couple.id,
+                    )
         else:
             # Partner doesn't exist — create pending invite
             couple = Couple.objects.create(
@@ -137,12 +150,23 @@ def _attach_partner_to_solo_couple(
 ) -> Couple:
     """Attach a partner to an existing solo active couple (user_b is None).
 
-    Preserves the solo user's existing swipe history and onboarding.
-    - If the partner has an account: attach immediately as user_b (stays active).
-    - If the partner has no account: convert the solo couple to a pending invite.
+    Preserves the inviting user's existing swipe history and onboarding.
+    - Partner has their own solo active couple (also swiped alone): merge the
+      partner's swipes and onboarding into this couple, then archive the
+      partner's solo couple.
+    - Partner has an account but no couple: attach immediately as user_b.
+    - Partner already in a real two-person active couple: reject.
+    - Partner has no account yet: keep this couple ACTIVE and record the invite
+      so they connect automatically when they register.
     """
     if partner:
-        if has_active_couple(partner):
+        partner_solo_couple = (
+            Couple.objects.select_for_update()
+            .filter(user_a=partner, status=CoupleStatus.ACTIVE, user_b__isnull=True)
+            .first()
+        )
+
+        if has_active_couple(partner) and not partner_solo_couple:
             raise CoupleExistsError("Partner is already in an active couple.")
 
         solo_couple.user_b = partner
@@ -155,16 +179,19 @@ def _attach_partner_to_solo_couple(
             partner.email,
         )
 
-        updated_partner = OnboardingResponse.objects.filter(user=partner, couple=None).update(
-            couple=solo_couple
-        )
-        if updated_partner:
-            logger.info(
-                "Associated %s solo onboarding response(s) for partner=%s with couple=%s",
-                updated_partner,
-                partner.email,
-                solo_couple.id,
+        if partner_solo_couple:
+            _merge_solo_couple_into(partner_solo_couple, solo_couple, partner)
+        else:
+            updated_partner = OnboardingResponse.objects.filter(user=partner, couple=None).update(
+                couple=solo_couple
             )
+            if updated_partner:
+                logger.info(
+                    "Associated %s solo onboarding response(s) for partner=%s with couple=%s",
+                    updated_partner,
+                    partner.email,
+                    solo_couple.id,
+                )
     else:
         # Partner has no account yet. Keep the couple ACTIVE so the solo user
         # can keep swiping, but record invite_email so the partner is connected
@@ -179,6 +206,48 @@ def _attach_partner_to_solo_couple(
         )
 
     return solo_couple
+
+
+def _merge_solo_couple_into(source_couple: Couple, target_couple: Couple, partner: "User") -> None:
+    """Merge a partner's solo couple into the target couple, then archive the source.
+
+    Moves the partner's swipes and onboarding response from their own solo
+    couple into the newly formed two-person couple so their likes contribute to
+    mutual-match detection. Swipes that would collide with an existing row in
+    the target couple (same user+name) are dropped, since the target already
+    records that preference.
+    """
+    existing_name_ids = set(
+        target_couple.swipes.filter(user=partner).values_list("name_id", flat=True)
+    )
+
+    moved = 0
+    for swipe in source_couple.swipes.filter(user=partner):
+        if swipe.name_id in existing_name_ids:
+            continue
+        swipe.couple = target_couple
+        swipe.save(update_fields=["couple", "updated_at"])
+        moved += 1
+
+    # Move the partner's solo onboarding response if the target lacks one.
+    target_has_onboarding = OnboardingResponse.objects.filter(
+        couple=target_couple, user=partner
+    ).exists()
+    if not target_has_onboarding:
+        OnboardingResponse.objects.filter(couple=source_couple, user=partner).update(
+            couple=target_couple
+        )
+        OnboardingResponse.objects.filter(user=partner, couple=None).update(couple=target_couple)
+
+    source_couple.status = CoupleStatus.ARCHIVED
+    source_couple.save(update_fields=["status", "updated_at"])
+    logger.info(
+        "Merged solo couple %s into %s for partner=%s (moved %s swipes, archived source)",
+        source_couple.id,
+        target_couple.id,
+        partner.email,
+        moved,
+    )
 
 
 def has_active_couple(user: "User") -> bool:
