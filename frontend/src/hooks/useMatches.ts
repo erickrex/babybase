@@ -27,6 +27,7 @@ interface MatchDetail {
   };
   matched_at: string;
   match_strength_score: number;
+  status: string;
   semantic_breakdown: {
     style_pct: number;
     heritage_pct: number;
@@ -53,6 +54,7 @@ interface MatchDetailApiResponse {
   };
   matched_at: string;
   match_strength_score: number;
+  status: string;
   semantic_fit_breakdown: {
     style: number;
     heritage: number;
@@ -75,6 +77,7 @@ function mapMatchDetail(data: MatchDetailApiResponse): MatchDetail {
     name: data.name,
     matched_at: data.matched_at,
     match_strength_score: data.match_strength_score,
+    status: data.status,
     semantic_breakdown: {
       style_pct: data.semantic_fit_breakdown.style,
       heritage_pct: data.semantic_fit_breakdown.heritage,
@@ -152,6 +155,24 @@ export function useMatches() {
     }
   }, []);
 
+  const addToShortlist = useCallback(async (nameId: string): Promise<boolean> => {
+    try {
+      await api.post('/shortlist/', { name_id: nameId });
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const removeFromShortlist = useCallback(async (nameId: string): Promise<boolean> => {
+    try {
+      await api.delete('/shortlist/', { data: { name_id: nameId } });
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   return {
     matches,
     isLoading,
@@ -159,6 +180,8 @@ export function useMatches() {
     loadMatches,
     getMatchDetail,
     getSimilarNames,
+    addToShortlist,
+    removeFromShortlist,
   };
 }
 

@@ -9,13 +9,15 @@ import type { MatchDetail, SimilarName } from '../../hooks/useMatches';
 export default function MatchDetailPage() {
   const { nameId } = useParams<{ nameId: string }>();
   const navigate = useNavigate();
-  const { getMatchDetail, getSimilarNames } = useMatches();
+  const { getMatchDetail, getSimilarNames, addToShortlist, removeFromShortlist } = useMatches();
 
   const [detail, setDetail] = useState<MatchDetail | null>(null);
   const [similarNames, setSimilarNames] = useState<SimilarName[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingSimilar, setIsLoadingSimilar] = useState(false);
   const [showSimilar, setShowSimilar] = useState(false);
+  const [isShortlisted, setIsShortlisted] = useState(false);
+  const [isUpdatingShortlist, setIsUpdatingShortlist] = useState(false);
 
   useEffect(() => {
     if (!nameId) return;
@@ -27,6 +29,7 @@ export default function MatchDetailPage() {
       const data = await getMatchDetail(nameId);
       if (!isCancelled) {
         setDetail(data);
+        setIsShortlisted(data?.status === 'shortlisted');
         setIsLoading(false);
       }
     };
@@ -37,6 +40,18 @@ export default function MatchDetailPage() {
       isCancelled = true;
     };
   }, [nameId, getMatchDetail]);
+
+  const handleToggleShortlist = async () => {
+    if (!nameId || isUpdatingShortlist) return;
+    setIsUpdatingShortlist(true);
+    const ok = isShortlisted
+      ? await removeFromShortlist(nameId)
+      : await addToShortlist(nameId);
+    if (ok) {
+      setIsShortlisted((prev) => !prev);
+    }
+    setIsUpdatingShortlist(false);
+  };
 
   const handleMoreLikeThis = async () => {
     if (!nameId) return;
@@ -95,6 +110,19 @@ export default function MatchDetailPage() {
           ))}
         </div>
       </div>
+
+      {/* Shortlist toggle */}
+      <button
+        onClick={handleToggleShortlist}
+        disabled={isUpdatingShortlist}
+        className={`w-full py-3 rounded-xl font-semibold mb-4 transition-colors disabled:opacity-60 ${
+          isShortlisted
+            ? 'bg-primary-muted text-primary-dark border border-primary'
+            : 'bg-primary text-white hover:bg-primary-dark'
+        }`}
+      >
+        {isShortlisted ? '★ Shortlisted — tap to remove' : '☆ Add to Shortlist'}
+      </button>
 
       {/* Name meaning & origin */}
       <div className="bg-bg-card rounded-xl border border-border p-4 shadow-card mb-4">

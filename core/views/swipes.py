@@ -270,7 +270,7 @@ def _compute_semantic_breakdown(name: Name) -> dict:
 
 
 
-@api_view(["GET", "POST"])
+@api_view(["GET", "POST", "DELETE"])
 @permission_classes([IsAuthenticated])
 def shortlist_view(request: Request) -> Response:
     """
@@ -278,12 +278,13 @@ def shortlist_view(request: Request) -> Response:
 
     GET /api/v1/shortlist/ — return shortlisted matches ordered by rank
     POST /api/v1/shortlist/ — promote match to shortlisted status
+    DELETE /api/v1/shortlist/ — demote match back to active (remove from shortlist)
 
     GET returns paginated shortlisted matches with name details, ordered by
     match_strength_score desc. Supports ?page=N and ?page_size=N query params.
 
-    POST accepts:
-        name_id: UUID of the matched name to shortlist
+    POST and DELETE accept:
+        name_id: UUID of the matched name to (un)shortlist
     """
     if request.method == "GET":
         couple = get_couple_for_user(request.user)
@@ -304,7 +305,7 @@ def shortlist_view(request: Request) -> Response:
         serialized = MatchSerializer(page, many=True).data
         return paginator.get_paginated_response({"status": "success", "data": serialized})
 
-    # POST — promote match to shortlisted status
+    # POST and DELETE share the same validation + lookup
     serializer = ShortlistSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(
@@ -332,9 +333,29 @@ def shortlist_view(request: Request) -> Response:
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    # Promote to shortlisted
+    if request.method == "DELETE":
+        # Demote back to active (remove from shortlist)
+        match.status = MatchStatus.ACTIVE
+        match.save(update_fields=["status", "updated_at"])
+        logger.info("Match removed from shortlist: couple=%s name=%s", couple.id, name_id)
+        return Response(
+            {
+                "status": "success",
+                "data": {
+                    "id": str(match.id),
+                    "name_id": str(match.name_id),
+                    "status": match.status,
+                    "match_strength_score": match.match_strength_score,
+                },
+                "message": "Match removed from shortlist.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    # POST — promote to shortlisted
     match.status = MatchStatus.SHORTLISTED
     match.save(update_fields=["status", "updated_at"])
+    logger.info("Match added to shortlist: couple=%s name=%s", couple.id, name_id)
 
     return Response(
         {

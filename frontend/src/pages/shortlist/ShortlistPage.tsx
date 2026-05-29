@@ -36,6 +36,15 @@ export default function ShortlistPage() {
     }
   }, []);
 
+  const handleRemove = useCallback(async (nameId: string) => {
+    try {
+      await api.delete('/shortlist/', { data: { name_id: nameId } });
+      setItems((prev) => prev.filter((item) => item.name.id !== nameId));
+    } catch {
+      // Silently handle
+    }
+  }, []);
+
   useEffect(() => {
     queueMicrotask(() => {
       void loadShortlist();
@@ -138,6 +147,20 @@ export default function ShortlistPage() {
                 ))}
               </div>
             </div>
+
+            {/* Remove from shortlist (hidden in compare mode) */}
+            {!compareMode && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleRemove(item.name.id);
+                }}
+                aria-label={`Remove ${item.name.display_name} from shortlist`}
+                className="shrink-0 w-8 h-8 rounded-full text-text-muted hover:bg-bg-muted hover:text-error transition-colors flex items-center justify-center"
+              >
+                ✕
+              </button>
+            )}
           </div>
         ))}
       </div>

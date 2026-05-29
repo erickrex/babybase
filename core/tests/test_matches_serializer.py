@@ -180,6 +180,59 @@ class TestMatchesListEndpointSchema:
 class TestShortlistEndpointSchema:
     """Integration tests for GET /api/v1/shortlist/ response schema."""
 
+    def test_shortlist_add_then_remove_round_trip(self, authenticated_client, match_for_couple, sample_name):
+        """POST promotes a match to shortlisted; DELETE demotes it back to active."""
+        client, couple, user_a, user_b = authenticated_client
+
+        # Initially active, not shortlisted
+        assert match_for_couple.status == MatchStatus.ACTIVE
+
+        # POST adds to shortlist
+        add_response = client.post(
+            "/api/v1/shortlist/", {"name_id": str(sample_name.id)}, format="json"
+        )
+        assert add_response.status_code == 200
+        assert add_response.json()["data"]["status"] == MatchStatus.SHORTLISTED
+        match_for_couple.refresh_from_db()
+        assert match_for_couple.status == MatchStatus.SHORTLISTED
+
+        # It now shows up in the shortlist listing
+        list_response = client.get("/api/v1/shortlist/")
+        assert len(list_response.json()["data"]) == 1
+
+        # DELETE removes from shortlist (back to active)
+        remove_response = client.delete(
+            "/api/v1/shortlist/", {"name_id": str(sample_name.id)}, format="json"
+        )
+        assert remove_response.status_code == 200
+        assert remove_response.json()["data"]["status"] == MatchStatus.ACTIVE
+        match_for_couple.refresh_from_db()
+        assert match_for_couple.status == MatchStatus.ACTIVE
+
+        # No longer in the shortlist listing
+        list_after = client.get("/api/v1/shortlist/")
+        assert len(list_after.json()["data"]) == 0
+
+    def test_shortlist_remove_unknown_name_returns_404(self, authenticated_client):
+        """Removing a name that isn't a match returns 404."""
+        import uuid
+
+        client, couple, user_a, user_b = authenticated_client
+        response = client.delete(
+            "/api/v1/shortlist/", {"name_id": str(uuid.uuid4())}, format="json"
+        )
+        assert response.status_code == 404
+
+    def test_match_detail_reports_shortlisted_status(self, authenticated_client, match_for_couple, sample_name):
+        """Match detail endpoint reflects shortlisted status so the UI can render correctly."""
+        client, couple, user_a, user_b = authenticated_client
+
+        client.post("/api/v1/shortlist/", {"name_id": str(sample_name.id)}, format="json")
+
+        detail = client.get(f"/api/v1/matches/{sample_name.id}/")
+        assert detail.status_code == 200
+        assert detail.json()["data"]["status"] == MatchStatus.SHORTLISTED
+
     def test_shortlist_response_uses_serializer_schema(self, authenticated_client, match_for_couple, sample_name):
         """Shortlist endpoint response matches MatchSerializer schema."""
         client, couple, user_a, user_b = authenticated_client
