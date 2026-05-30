@@ -45,6 +45,16 @@ class MatchSerializer(serializers.Serializer):
     matched_at = serializers.DateTimeField()
     match_strength_score = serializers.FloatField()
     status = serializers.CharField()
+    removal_requested_by = serializers.SerializerMethodField()
+    removal_pending = serializers.SerializerMethodField()
+
+    def get_removal_requested_by(self, obj) -> str | None:
+        """Return the id of the user who requested removal, or None."""
+        return str(obj.removal_requested_by_id) if obj.removal_requested_by_id else None
+
+    def get_removal_pending(self, obj) -> bool:
+        """True when a removal request is awaiting partner approval."""
+        return obj.removal_requested_by_id is not None
 
 
 class MatchDetailSerializer(serializers.Serializer):
@@ -62,6 +72,21 @@ class ShortlistSerializer(serializers.Serializer):
     """Serializer for adding a match to the shortlist."""
 
     name_id = serializers.UUIDField()
+
+
+class ShortlistRemovalSerializer(serializers.Serializer):
+    """Serializer for shortlist removal-request actions.
+
+    decision controls the two-step removal flow:
+    - omitted/null: request removal (or approve if partner already requested)
+    - "cancel": requester withdraws their own pending request
+    - "reject": the other partner declines a pending request
+    """
+
+    name_id = serializers.UUIDField()
+    decision = serializers.ChoiceField(
+        choices=["cancel", "reject"], required=False, allow_null=True
+    )
 
 
 class SimilarNameSerializer(serializers.Serializer):

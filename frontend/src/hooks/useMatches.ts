@@ -164,15 +164,6 @@ export function useMatches() {
     }
   }, []);
 
-  const removeFromShortlist = useCallback(async (nameId: string): Promise<boolean> => {
-    try {
-      await api.delete('/shortlist/', { data: { name_id: nameId } });
-      return true;
-    } catch {
-      return false;
-    }
-  }, []);
-
   return {
     matches,
     isLoading,
@@ -181,7 +172,6 @@ export function useMatches() {
     getMatchDetail,
     getSimilarNames,
     addToShortlist,
-    removeFromShortlist,
   };
 }
 

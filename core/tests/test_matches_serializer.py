@@ -169,7 +169,10 @@ class TestMatchesListEndpointSchema:
 
         assert len(data) == 2
         for match_item in data:
-            assert set(match_item.keys()) == {"id", "name", "matched_at", "match_strength_score", "status"}
+            assert set(match_item.keys()) == {
+                "id", "name", "matched_at", "match_strength_score", "status",
+                "removal_requested_by", "removal_pending",
+            }
             assert set(match_item["name"].keys()) == {
                 "id", "canonical_name", "display_name", "gender_usage",
                 "origin_backgrounds", "languages", "length_category",
@@ -180,11 +183,10 @@ class TestMatchesListEndpointSchema:
 class TestShortlistEndpointSchema:
     """Integration tests for GET /api/v1/shortlist/ response schema."""
 
-    def test_shortlist_add_then_remove_round_trip(self, authenticated_client, match_for_couple, sample_name):
-        """POST promotes a match to shortlisted; DELETE demotes it back to active."""
+    def test_remove_requires_partner_approval(self, authenticated_client, match_for_couple, sample_name):
+        """POST shortlists; DELETE by one partner requests removal but does not remove until approved."""
         client, couple, user_a, user_b = authenticated_client
 
-        # Initially active, not shortlisted
         assert match_for_couple.status == MatchStatus.ACTIVE
 
         # POST adds to shortlist
@@ -193,25 +195,102 @@ class TestShortlistEndpointSchema:
         )
         assert add_response.status_code == 200
         assert add_response.json()["data"]["status"] == MatchStatus.SHORTLISTED
-        match_for_couple.refresh_from_db()
-        assert match_for_couple.status == MatchStatus.SHORTLISTED
 
-        # It now shows up in the shortlist listing
-        list_response = client.get("/api/v1/shortlist/")
-        assert len(list_response.json()["data"]) == 1
-
-        # DELETE removes from shortlist (back to active)
-        remove_response = client.delete(
+        # DELETE by user_a only REQUESTS removal — still shortlisted, now pending
+        request_response = client.delete(
             "/api/v1/shortlist/", {"name_id": str(sample_name.id)}, format="json"
         )
-        assert remove_response.status_code == 200
-        assert remove_response.json()["data"]["status"] == MatchStatus.ACTIVE
+        assert request_response.status_code == 200
+        body = request_response.json()["data"]
+        assert body["status"] == MatchStatus.SHORTLISTED  # NOT removed
+        assert body["removal_pending"] is True
+        assert body["removal_requested_by"] == str(user_a.id)
+
+        match_for_couple.refresh_from_db()
+        assert match_for_couple.status == MatchStatus.SHORTLISTED
+        assert match_for_couple.removal_requested_by_id == user_a.id
+
+        # Still appears in the shortlist while pending
+        assert len(client.get("/api/v1/shortlist/").json()["data"]) == 1
+
+    def test_partner_approval_removes_from_shortlist(self, authenticated_client, match_for_couple, sample_name):
+        """When the other partner approves the removal, the name leaves the shortlist."""
+        client, couple, user_a, user_b = authenticated_client
+
+        client.post("/api/v1/shortlist/", {"name_id": str(sample_name.id)}, format="json")
+        # user_a requests removal
+        client.delete("/api/v1/shortlist/", {"name_id": str(sample_name.id)}, format="json")
+
+        # user_b approves (authenticate as user_b)
+        token_b, _ = Token.objects.get_or_create(user=user_b)
+        client_b = APIClient()
+        client_b.credentials(HTTP_AUTHORIZATION=f"Token {token_b.key}")
+        approve = client_b.delete(
+            "/api/v1/shortlist/", {"name_id": str(sample_name.id)}, format="json"
+        )
+        assert approve.status_code == 200
+        assert approve.json()["data"]["status"] == MatchStatus.ACTIVE
+
         match_for_couple.refresh_from_db()
         assert match_for_couple.status == MatchStatus.ACTIVE
+        assert match_for_couple.removal_requested_by_id is None
+        assert len(client.get("/api/v1/shortlist/").json()["data"]) == 0
 
-        # No longer in the shortlist listing
-        list_after = client.get("/api/v1/shortlist/")
-        assert len(list_after.json()["data"]) == 0
+    def test_requester_can_cancel_own_removal_request(self, authenticated_client, match_for_couple, sample_name):
+        """The partner who requested removal can cancel it, keeping the name shortlisted."""
+        client, couple, user_a, user_b = authenticated_client
+
+        client.post("/api/v1/shortlist/", {"name_id": str(sample_name.id)}, format="json")
+        client.delete("/api/v1/shortlist/", {"name_id": str(sample_name.id)}, format="json")
+
+        cancel = client.delete(
+            "/api/v1/shortlist/",
+            {"name_id": str(sample_name.id), "decision": "cancel"},
+            format="json",
+        )
+        assert cancel.status_code == 200
+        match_for_couple.refresh_from_db()
+        assert match_for_couple.status == MatchStatus.SHORTLISTED
+        assert match_for_couple.removal_requested_by_id is None
+
+    def test_partner_can_reject_removal_request(self, authenticated_client, match_for_couple, sample_name):
+        """The other partner can reject a removal request, keeping the name shortlisted."""
+        client, couple, user_a, user_b = authenticated_client
+
+        client.post("/api/v1/shortlist/", {"name_id": str(sample_name.id)}, format="json")
+        client.delete("/api/v1/shortlist/", {"name_id": str(sample_name.id)}, format="json")
+
+        token_b, _ = Token.objects.get_or_create(user=user_b)
+        client_b = APIClient()
+        client_b.credentials(HTTP_AUTHORIZATION=f"Token {token_b.key}")
+        reject = client_b.delete(
+            "/api/v1/shortlist/",
+            {"name_id": str(sample_name.id), "decision": "reject"},
+            format="json",
+        )
+        assert reject.status_code == 200
+        match_for_couple.refresh_from_db()
+        assert match_for_couple.status == MatchStatus.SHORTLISTED
+        assert match_for_couple.removal_requested_by_id is None
+
+    def test_solo_couple_removal_is_immediate(self, sample_name, db):
+        """A solo couple (no partner) removes from shortlist immediately without approval."""
+        solo_user = User.objects.create_user(email="solo@test.com", password="testpass123")
+        couple = Couple.objects.create(user_a=solo_user, user_b=None, status=CoupleStatus.ACTIVE)
+        match = MutualMatch.objects.create(
+            couple=couple, name=sample_name, match_strength_score=0.7, status=MatchStatus.SHORTLISTED
+        )
+
+        token, _ = Token.objects.get_or_create(user=solo_user)
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+        response = client.delete(
+            "/api/v1/shortlist/", {"name_id": str(sample_name.id)}, format="json"
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["status"] == MatchStatus.ACTIVE
+        match.refresh_from_db()
+        assert match.status == MatchStatus.ACTIVE
 
     def test_shortlist_remove_unknown_name_returns_404(self, authenticated_client):
         """Removing a name that isn't a match returns 404."""
@@ -251,7 +330,10 @@ class TestShortlistEndpointSchema:
         match_item = data["data"][0]
 
         # Verify same schema as matches list
-        assert set(match_item.keys()) == {"id", "name", "matched_at", "match_strength_score", "status"}
+        assert set(match_item.keys()) == {
+            "id", "name", "matched_at", "match_strength_score", "status",
+            "removal_requested_by", "removal_pending",
+        }
         assert match_item["status"] == "shortlisted"
 
         # Verify nested name fields

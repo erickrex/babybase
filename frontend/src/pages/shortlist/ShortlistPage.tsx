@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface ShortlistItem {
   id: string;
@@ -13,12 +14,17 @@ interface ShortlistItem {
     historical_significance_score: number;
   };
   match_strength_score: number;
+  removal_pending: boolean;
+  removal_requested_by: string | null;
 }
 
 /**
  * Shortlist page: ordered list of shortlisted names with reorder and compare.
+ * Removing a name requires the partner's approval — one partner requests
+ * removal, the other approves before the name leaves the shortlist.
  */
 export default function ShortlistPage() {
+  const { user } = useAuth();
   const [items, setItems] = useState<ShortlistItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [compareMode, setCompareMode] = useState(false);
@@ -36,10 +42,41 @@ export default function ShortlistPage() {
     }
   }, []);
 
-  const handleRemove = useCallback(async (nameId: string) => {
+  // Request removal (or approve the partner's request if one is already pending).
+  const handleRequestOrApprove = useCallback(async (nameId: string) => {
     try {
-      await api.delete('/shortlist/', { data: { name_id: nameId } });
-      setItems((prev) => prev.filter((item) => item.name.id !== nameId));
+      const res = await api.delete('/shortlist/', { data: { name_id: nameId } });
+      const data = res.data.data;
+      if (data.status !== 'shortlisted') {
+        // Fully removed (approved, or solo couple) — drop from the list
+        setItems((prev) => prev.filter((item) => item.name.id !== nameId));
+      } else {
+        // Still shortlisted but now pending removal — update the flag in place
+        setItems((prev) =>
+          prev.map((item) =>
+            item.name.id === nameId
+              ? { ...item, removal_pending: data.removal_pending, removal_requested_by: data.removal_requested_by }
+              : item
+          )
+        );
+      }
+    } catch {
+      // Silently handle
+    }
+  }, []);
+
+  // Resolve a pending request without removing: "cancel" (by requester) or "reject" (by partner).
+  const handleResolveRequest = useCallback(async (nameId: string, decision: 'cancel' | 'reject') => {
+    try {
+      const res = await api.delete('/shortlist/', { data: { name_id: nameId, decision } });
+      const data = res.data.data;
+      setItems((prev) =>
+        prev.map((item) =>
+          item.name.id === nameId
+            ? { ...item, removal_pending: data.removal_pending, removal_requested_by: data.removal_requested_by }
+            : item
+        )
+      );
     } catch {
       // Silently handle
     }
@@ -116,53 +153,105 @@ export default function ShortlistPage() {
 
       {/* Ordered list */}
       <div className="space-y-2 mb-6">
-        {items.map((item, index) => (
-          <div
-            key={item.id}
-            className={`bg-bg-card rounded-xl border p-3 shadow-card flex items-center gap-3 transition-colors ${
-              compareMode && selectedForCompare.includes(item.id)
-                ? 'border-primary bg-primary-muted'
-                : 'border-border'
-            }`}
-            onClick={compareMode ? () => toggleCompareSelection(item.id) : undefined}
-          >
-            {/* Rank number */}
-            <span className="w-6 h-6 rounded-full bg-primary-muted text-primary-dark text-xs font-bold flex items-center justify-center shrink-0">
-              {index + 1}
-            </span>
+        {items.map((item, index) => {
+          const requestedByMe = item.removal_requested_by === user?.id;
+          return (
+            <div
+              key={item.id}
+              className={`bg-bg-card rounded-xl border p-3 shadow-card transition-colors ${
+                compareMode && selectedForCompare.includes(item.id)
+                  ? 'border-primary bg-primary-muted'
+                  : item.removal_pending
+                    ? 'border-coral/40'
+                    : 'border-border'
+              }`}
+              onClick={compareMode ? () => toggleCompareSelection(item.id) : undefined}
+            >
+              <div className="flex items-center gap-3">
+                {/* Rank number */}
+                <span className="w-6 h-6 rounded-full bg-primary-muted text-primary-dark text-xs font-bold flex items-center justify-center shrink-0">
+                  {index + 1}
+                </span>
 
-            {/* Name info */}
-            <div className="flex-1 min-w-0">
-              <h3 className="font-semibold text-text truncate">
-                {item.name.display_name}
-              </h3>
-              <div className="flex gap-1 mt-0.5">
-                {item.name.origin_backgrounds.slice(0, 2).map((o) => (
-                  <span
-                    key={o}
-                    className="text-xs text-text-muted"
+                {/* Name info */}
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold text-text truncate">
+                    {item.name.display_name}
+                  </h3>
+                  <div className="flex gap-1 mt-0.5">
+                    {item.name.origin_backgrounds.slice(0, 2).map((o) => (
+                      <span key={o} className="text-xs text-text-muted">
+                        {o}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Request removal (only when no request pending and not comparing) */}
+                {!compareMode && !item.removal_pending && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleRequestOrApprove(item.name.id);
+                    }}
+                    aria-label={`Request removal of ${item.name.display_name}`}
+                    className="shrink-0 w-8 h-8 rounded-full text-text-muted hover:bg-bg-muted hover:text-error transition-colors flex items-center justify-center"
                   >
-                    {o}
-                  </span>
-                ))}
+                    ✕
+                  </button>
+                )}
               </div>
-            </div>
 
-            {/* Remove from shortlist (hidden in compare mode) */}
-            {!compareMode && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void handleRemove(item.name.id);
-                }}
-                aria-label={`Remove ${item.name.display_name} from shortlist`}
-                className="shrink-0 w-8 h-8 rounded-full text-text-muted hover:bg-bg-muted hover:text-error transition-colors flex items-center justify-center"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-        ))}
+              {/* Pending removal controls */}
+              {!compareMode && item.removal_pending && (
+                <div className="mt-3 pt-3 border-t border-border">
+                  {requestedByMe ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-text-secondary">
+                        ⏳ Removal requested. Waiting for your partner.
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleResolveRequest(item.name.id, 'cancel');
+                        }}
+                        className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-bg-muted text-text-secondary hover:bg-border transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-coral-dark">
+                        Your partner wants to remove this name.
+                      </span>
+                      <div className="flex gap-2 shrink-0">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleResolveRequest(item.name.id, 'reject');
+                          }}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-bg-muted text-text-secondary hover:bg-border transition-colors"
+                        >
+                          Keep
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleRequestOrApprove(item.name.id);
+                          }}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-error text-white hover:opacity-90 transition-opacity"
+                        >
+                          Approve removal
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* Compare view (side-by-side finalists) */}

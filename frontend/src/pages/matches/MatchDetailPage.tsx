@@ -9,7 +9,7 @@ import type { MatchDetail, SimilarName } from '../../hooks/useMatches';
 export default function MatchDetailPage() {
   const { nameId } = useParams<{ nameId: string }>();
   const navigate = useNavigate();
-  const { getMatchDetail, getSimilarNames, addToShortlist, removeFromShortlist } = useMatches();
+  const { getMatchDetail, getSimilarNames, addToShortlist } = useMatches();
 
   const [detail, setDetail] = useState<MatchDetail | null>(null);
   const [similarNames, setSimilarNames] = useState<SimilarName[]>([]);
@@ -42,13 +42,11 @@ export default function MatchDetailPage() {
   }, [nameId, getMatchDetail]);
 
   const handleToggleShortlist = async () => {
-    if (!nameId || isUpdatingShortlist) return;
+    if (!nameId || isUpdatingShortlist || isShortlisted) return;
     setIsUpdatingShortlist(true);
-    const ok = isShortlisted
-      ? await removeFromShortlist(nameId)
-      : await addToShortlist(nameId);
+    const ok = await addToShortlist(nameId);
     if (ok) {
-      setIsShortlisted((prev) => !prev);
+      setIsShortlisted(true);
     }
     setIsUpdatingShortlist(false);
   };
@@ -114,15 +112,20 @@ export default function MatchDetailPage() {
       {/* Shortlist toggle */}
       <button
         onClick={handleToggleShortlist}
-        disabled={isUpdatingShortlist}
+        disabled={isUpdatingShortlist || isShortlisted}
         className={`w-full py-3 rounded-xl font-semibold mb-4 transition-colors disabled:opacity-60 ${
           isShortlisted
-            ? 'bg-primary-muted text-primary-dark border border-primary'
+            ? 'bg-primary-muted text-primary-dark border border-primary cursor-default'
             : 'bg-primary text-white hover:bg-primary-dark'
         }`}
       >
-        {isShortlisted ? '★ Shortlisted — tap to remove' : '☆ Add to Shortlist'}
+        {isShortlisted ? '★ On your shortlist' : '☆ Add to Shortlist'}
       </button>
+      {isShortlisted && (
+        <p className="text-xs text-text-muted text-center -mt-2 mb-4">
+          Manage removals from the Shortlist tab (removing needs your partner&apos;s approval).
+        </p>
+      )}
 
       {/* Name meaning & origin */}
       <div className="bg-bg-card rounded-xl border border-border p-4 shadow-card mb-4">

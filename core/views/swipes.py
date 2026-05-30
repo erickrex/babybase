@@ -13,6 +13,7 @@ from core.pagination import StandardPagination
 from core.serializers.swipes import (
     MatchDetailSerializer,
     MatchSerializer,
+    ShortlistRemovalSerializer,
     ShortlistSerializer,
     SimilarNameSerializer,
     SwipeSerializer,
@@ -305,14 +306,6 @@ def shortlist_view(request: Request) -> Response:
         serialized = MatchSerializer(page, many=True).data
         return paginator.get_paginated_response({"status": "success", "data": serialized})
 
-    # POST and DELETE share the same validation + lookup
-    serializer = ShortlistSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(
-            {"status": "error", "message": "Validation failed.", "errors": serializer.errors},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
     couple = get_couple_for_user(request.user)
     if not couple:
         return Response(
@@ -320,39 +313,26 @@ def shortlist_view(request: Request) -> Response:
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    name_id = str(serializer.validated_data["name_id"])
+    if request.method == "DELETE":
+        return _handle_shortlist_removal(request, couple)
 
-    # Find the match
-    try:
-        match = MutualMatch.objects.select_related("name").get(
-            couple=couple, name_id=name_id
+    # POST — promote to shortlisted
+    serializer = ShortlistSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(
+            {"status": "error", "message": "Validation failed.", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
         )
+
+    name_id = str(serializer.validated_data["name_id"])
+    try:
+        match = MutualMatch.objects.select_related("name").get(couple=couple, name_id=name_id)
     except MutualMatch.DoesNotExist:
         return Response(
             {"status": "error", "message": "Match not found. Only mutual matches can be shortlisted."},
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    if request.method == "DELETE":
-        # Demote back to active (remove from shortlist)
-        match.status = MatchStatus.ACTIVE
-        match.save(update_fields=["status", "updated_at"])
-        logger.info("Match removed from shortlist: couple=%s name=%s", couple.id, name_id)
-        return Response(
-            {
-                "status": "success",
-                "data": {
-                    "id": str(match.id),
-                    "name_id": str(match.name_id),
-                    "status": match.status,
-                    "match_strength_score": match.match_strength_score,
-                },
-                "message": "Match removed from shortlist.",
-            },
-            status=status.HTTP_200_OK,
-        )
-
-    # POST — promote to shortlisted
     match.status = MatchStatus.SHORTLISTED
     match.save(update_fields=["status", "updated_at"])
     logger.info("Match added to shortlist: couple=%s name=%s", couple.id, name_id)
@@ -360,13 +340,101 @@ def shortlist_view(request: Request) -> Response:
     return Response(
         {
             "status": "success",
-            "data": {
-                "id": str(match.id),
-                "name_id": str(match.name_id),
-                "status": match.status,
-                "match_strength_score": match.match_strength_score,
-            },
+            "data": _shortlist_match_payload(match),
             "message": "Match added to shortlist.",
         },
         status=status.HTTP_200_OK,
     )
+
+
+def _shortlist_match_payload(match: MutualMatch) -> dict:
+    """Build the consistent response payload for a shortlist mutation."""
+    return {
+        "id": str(match.id),
+        "name_id": str(match.name_id),
+        "status": match.status,
+        "match_strength_score": match.match_strength_score,
+        "removal_requested_by": (
+            str(match.removal_requested_by_id) if match.removal_requested_by_id else None
+        ),
+        "removal_pending": match.removal_requested_by_id is not None,
+    }
+
+
+def _handle_shortlist_removal(request: Request, couple) -> Response:
+    """Two-step shortlist removal requiring partner approval.
+
+    - Solo couple (no partner): removal is immediate.
+    - decision="cancel": requester withdraws their own pending request.
+    - decision="reject": the other partner declines a pending request.
+    - no decision: request removal, or approve if the partner already requested.
+    """
+    serializer = ShortlistRemovalSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(
+            {"status": "error", "message": "Validation failed.", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    name_id = str(serializer.validated_data["name_id"])
+    decision = serializer.validated_data.get("decision")
+
+    try:
+        match = MutualMatch.objects.select_related("name").get(couple=couple, name_id=name_id)
+    except MutualMatch.DoesNotExist:
+        return Response(
+            {"status": "error", "message": "Match not found. Only mutual matches can be shortlisted."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    partner = couple.user_b if couple.user_a_id == request.user.id else couple.user_a
+
+    def _remove() -> None:
+        match.status = MatchStatus.ACTIVE
+        match.removal_requested_by = None
+        match.save(update_fields=["status", "removal_requested_by", "updated_at"])
+
+    def _respond(message: str) -> Response:
+        return Response(
+            {"status": "success", "data": _shortlist_match_payload(match), "message": message},
+            status=status.HTTP_200_OK,
+        )
+
+    # Solo couple — no partner to consult, remove immediately.
+    if partner is None:
+        _remove()
+        logger.info("Match removed from shortlist (solo couple): couple=%s name=%s", couple.id, name_id)
+        return _respond("Match removed from shortlist.")
+
+    # Explicit cancel: requester withdraws their own pending request.
+    if decision == "cancel":
+        if match.removal_requested_by_id == request.user.id:
+            match.removal_requested_by = None
+            match.save(update_fields=["removal_requested_by", "updated_at"])
+            logger.info("Removal request cancelled: couple=%s name=%s", couple.id, name_id)
+        return _respond("Removal request cancelled.")
+
+    # Explicit reject: the other partner declines a pending request.
+    if decision == "reject":
+        if match.removal_requested_by_id and match.removal_requested_by_id != request.user.id:
+            match.removal_requested_by = None
+            match.save(update_fields=["removal_requested_by", "updated_at"])
+            logger.info("Removal request rejected: couple=%s name=%s", couple.id, name_id)
+        return _respond("Removal request declined.")
+
+    # No decision: either approve the partner's pending request, or open one.
+    if match.removal_requested_by_id and match.removal_requested_by_id != request.user.id:
+        # The other partner already requested — this DELETE approves it.
+        _remove()
+        logger.info("Removal request approved: couple=%s name=%s", couple.id, name_id)
+        return _respond("Match removed from shortlist.")
+
+    if match.removal_requested_by_id == request.user.id:
+        # Already requested by me — idempotent, still waiting on partner.
+        return _respond("Removal already requested. Waiting for your partner to approve.")
+
+    # No pending request — open one.
+    match.removal_requested_by = request.user
+    match.save(update_fields=["removal_requested_by", "updated_at"])
+    logger.info("Removal requested: couple=%s name=%s by=%s", couple.id, name_id, request.user.email)
+    return _respond("Removal requested. Waiting for your partner to approve.")

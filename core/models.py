@@ -379,6 +379,15 @@ class MutualMatch(BaseModel):
         choices=MatchStatus.choices,
         default=MatchStatus.ACTIVE,
     )
+    # When set, one partner has requested to remove this shortlisted name and
+    # is waiting for the other partner to approve. Cleared on approve/cancel/reject.
+    removal_requested_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="requested_match_removals",
+    )
 
     class Meta:
         db_table = "core_mutual_match"
