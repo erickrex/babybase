@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { useCouple } from '../../contexts/CoupleContext';
 import type { AxiosError } from 'axios';
 
 interface ApiErrorResponse {
@@ -16,6 +17,7 @@ export default function LoginPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const { login } = useAuth();
+  const { refresh } = useCouple();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: FormEvent) => {
@@ -25,7 +27,12 @@ export default function LoginPage() {
 
     try {
       await login(email, password);
-      navigate('/deck');
+      // Fetch couple state before routing so the OnboardingGuard decides
+      // based on real data, not the default empty state. Already-onboarded
+      // users go straight to the deck instead of back through onboarding.
+      const nextState = await refresh();
+      const needsOnboarding = !nextState.onboardingComplete.user;
+      navigate(needsOnboarding ? '/onboarding/preferences' : '/deck');
     } catch (err) {
       const axiosError = err as AxiosError<ApiErrorResponse>;
       if (axiosError.response?.status === 429) {

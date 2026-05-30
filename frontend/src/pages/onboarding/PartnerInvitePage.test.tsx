@@ -46,6 +46,7 @@ describe('PartnerInvitePage', () => {
         onboardingComplete: { user: false, partner: false },
       },
       isLoading: false,
+      isInitialized: true,
       refresh: vi.fn(),
       syncAfterMutation: syncAfterMutationMock,
     });
@@ -82,6 +83,7 @@ describe('PartnerInvitePage', () => {
         onboardingComplete: { user: false, partner: false },
       },
       isLoading: false,
+      isInitialized: true,
       refresh: vi.fn(),
       syncAfterMutation: syncAfterMutationMock,
     });

@@ -57,6 +57,7 @@ describe('PreferencesPage', () => {
         onboardingComplete: { user: false, partner: false },
       },
       isLoading: false,
+      isInitialized: true,
       refresh: vi.fn(),
       syncAfterMutation: syncAfterMutationMock,
     });
@@ -126,5 +127,32 @@ describe('PreferencesPage', () => {
     await waitFor(() => {
       expect(navigateMock).toHaveBeenCalledWith('/deck');
     });
+  });
+
+  it('redirects an already-onboarded user to the deck without showing the questionnaire', async () => {
+    mockedUseCouple.mockReturnValue({
+      coupleState: {
+        hasCouple: true,
+        couple: { id: '1', status: 'active', residence_country: 'DE', created_at: '' },
+        partner: { id: '2', email: 'partner@test.com', first_name: 'Partner', role_in_pregnancy: 'other' },
+        onboardingComplete: { user: true, partner: true },
+      },
+      isLoading: false,
+      isInitialized: true,
+      refresh: vi.fn(),
+      syncAfterMutation: syncAfterMutationMock,
+    });
+
+    render(
+      <MemoryRouter>
+        <PreferencesPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith('/deck', { replace: true });
+    });
+    // The questionnaire submit must never fire for an already-onboarded user
+    expect(mockedApi.post).not.toHaveBeenCalled();
   });
 });

@@ -7,10 +7,13 @@ import type { ReactNode } from 'react';
  * Redirects to the appropriate onboarding step if the user hasn't completed setup.
  */
 export default function OnboardingGuard({ children }: { children: ReactNode }) {
-  const { coupleState, isLoading } = useCouple();
+  const { coupleState, isLoading, isInitialized } = useCouple();
   const coupleStatus = coupleState.couple?.status;
 
-  if (isLoading) {
+  // Wait until couple state has actually been fetched for this session.
+  // Routing on the default empty state before the first fetch would wrongly
+  // send already-onboarded users back through onboarding.
+  if (isLoading || !isInitialized) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-bg">
         <div className="w-10 h-10 border-3 border-primary border-t-transparent rounded-full animate-spin" />

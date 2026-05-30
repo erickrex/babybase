@@ -39,6 +39,7 @@ interface CoupleState {
 interface CoupleContextType {
   coupleState: CoupleState;
   isLoading: boolean;
+  isInitialized: boolean;
   refresh: () => Promise<CoupleState>;
   syncAfterMutation: <T>(operation: () => Promise<T>) => Promise<{ result: T; coupleState: CoupleState }>;
 }
@@ -56,10 +57,18 @@ export function CoupleProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuth();
   const [coupleState, setCoupleState] = useState<CoupleState>(defaultState);
   const [isLoading, setIsLoading] = useState(isAuthenticated);
+  // True once couple state has been fetched at least once for the current
+  // authenticated session. Guards must not route on the default empty state
+  // before the first fetch resolves.
+  const [isInitialized, setIsInitialized] = useState(false);
 
   const refresh = useCallback(async () => {
-    if (!isAuthenticated) {
+    // Read the token directly rather than relying on the `isAuthenticated`
+    // closure, which can be stale immediately after login (before re-render).
+    const hasToken = Boolean(localStorage.getItem('token'));
+    if (!hasToken) {
       setCoupleState(defaultState);
+      setIsInitialized(true);
       return defaultState;
     }
 
@@ -80,8 +89,9 @@ export function CoupleProvider({ children }: { children: ReactNode }) {
       return defaultState;
     } finally {
       setIsLoading(false);
+      setIsInitialized(true);
     }
-  }, [isAuthenticated]);
+  }, []);
 
   const syncAfterMutation = useCallback(
     async <T,>(operation: () => Promise<T>) => {
@@ -107,10 +117,10 @@ export function CoupleProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [refresh]);
+  }, [refresh, isAuthenticated]);
 
   return (
-    <CoupleContext.Provider value={{ coupleState, isLoading, refresh, syncAfterMutation }}>
+    <CoupleContext.Provider value={{ coupleState, isLoading, isInitialized, refresh, syncAfterMutation }}>
       {children}
     </CoupleContext.Provider>
   );

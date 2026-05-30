@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../../services/api';
 import { useCouple } from '../../contexts/CoupleContext';
@@ -84,11 +84,20 @@ const QUESTIONS: Question[] = [
 
 export default function PreferencesPage() {
   const navigate = useNavigate();
-  const { syncAfterMutation } = useCouple();
+  const { syncAfterMutation, coupleState, isInitialized } = useCouple();
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Defensive guard: a user who has already completed onboarding should never
+  // see the questionnaire again (re-submitting would overwrite their saved
+  // preferences). Send them to the deck instead.
+  useEffect(() => {
+    if (isInitialized && coupleState.onboardingComplete.user) {
+      navigate('/deck', { replace: true });
+    }
+  }, [isInitialized, coupleState.onboardingComplete.user, navigate]);
 
   const currentQuestion = QUESTIONS[step];
   const isLastStep = step === QUESTIONS.length - 1;

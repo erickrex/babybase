@@ -64,6 +64,7 @@ function makeContextValue(overrides: Partial<ReturnType<typeof mockedUseCouple>>
       onboardingComplete: { user: false, partner: false },
     },
     isLoading: false,
+    isInitialized: true,
     refresh: vi.fn(),
     syncAfterMutation: vi.fn(),
     ...overrides,
