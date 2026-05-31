@@ -1,122 +1,33 @@
 """Management command to compute 2D projections for the Name Constellation map.
 
-For MVP, uses a deterministic hash-based approach that clusters names by origin_backgrounds.
-Real UMAP/t-SNE would require actual semantic vectors from Qdrant.
+Persists ``Name.x_2d`` / ``Name.y_2d`` as a deterministic PCA (SVD) projection
+of the ``semantic`` named vectors retrieved from Qdrant, normalized per-axis to
+the ``[0, 1]`` range expected by the constellation API and frontend.
+
+The math and Qdrant retrieval live in ``core/services/projection.py``; this
+command only orchestrates loading, partitioning, persistence selection, and
+reporting so it stays thin (per the project architecture rules).
 """
 
-import hashlib
+import logging
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 from core.models import Name
+from core.services.projection import (
+    INSUFFICIENT_VECTORS,
+    fetch_semantic_vectors,
+    normalize_axes,
+    pca_project_2d,
+)
 
-# Origin clusters: map origin backgrounds to approximate x-center positions
-ORIGIN_CLUSTERS = {
-    "Spanish": (0.2, 0.3),
-    "Latin": (0.25, 0.35),
-    "Italian": (0.3, 0.25),
-    "Portuguese": (0.22, 0.4),
-    "French": (0.35, 0.3),
-    "Greek": (0.4, 0.5),
-    "Russian": (0.7, 0.3),
-    "Slavic": (0.72, 0.35),
-    "Ukrainian": (0.68, 0.28),
-    "Polish": (0.65, 0.32),
-    "Czech": (0.63, 0.38),
-    "Serbian": (0.67, 0.42),
-    "Bulgarian": (0.7, 0.45),
-    "Germanic": (0.5, 0.6),
-    "German": (0.5, 0.6),
-    "English": (0.45, 0.65),
-    "Scandinavian": (0.55, 0.7),
-    "Norse": (0.58, 0.72),
-    "Swedish": (0.56, 0.68),
-    "Norwegian": (0.57, 0.74),
-    "Danish": (0.54, 0.66),
-    "Finnish": (0.6, 0.75),
-    "Celtic": (0.4, 0.7),
-    "Irish": (0.38, 0.72),
-    "Scottish": (0.42, 0.71),
-    "Welsh": (0.39, 0.68),
-    "Arabic": (0.8, 0.5),
-    "Persian": (0.82, 0.55),
-    "Turkish": (0.75, 0.52),
-    "Hebrew": (0.78, 0.45),
-    "Japanese": (0.85, 0.75),
-    "Chinese": (0.88, 0.7),
-    "Korean": (0.87, 0.78),
-    "Hindi": (0.82, 0.65),
-    "Sanskrit": (0.8, 0.62),
-    "African": (0.3, 0.8),
-    "Swahili": (0.32, 0.82),
-    "Hawaiian": (0.15, 0.75),
-}
-
-# Style offsets for y-axis variation
-STYLE_OFFSETS = {
-    "classic": -0.05,
-    "modern": 0.05,
-    "timeless": 0.0,
-}
-
-
-def _deterministic_jitter(name: str, seed: int = 0) -> tuple[float, float]:
-    """Generate deterministic jitter from name hash."""
-    h = hashlib.md5(f"{name}:{seed}".encode()).hexdigest()
-    jx = (int(h[:8], 16) / 0xFFFFFFFF - 0.5) * 0.08
-    jy = (int(h[8:16], 16) / 0xFFFFFFFF - 0.5) * 0.08
-    return jx, jy
-
-
-def compute_position(name: Name) -> tuple[float, float]:
-    """Compute a deterministic 2D position for a name based on its metadata."""
-    origins = name.origin_backgrounds or []
-
-    # Average the cluster centers of all origins
-    if origins:
-        x_sum, y_sum, count = 0.0, 0.0, 0
-        for origin in origins:
-            if origin in ORIGIN_CLUSTERS:
-                cx, cy = ORIGIN_CLUSTERS[origin]
-                x_sum += cx
-                y_sum += cy
-                count += 1
-            else:
-                # Try partial match
-                for key, (cx, cy) in ORIGIN_CLUSTERS.items():
-                    if key.lower() in origin.lower() or origin.lower() in key.lower():
-                        x_sum += cx
-                        y_sum += cy
-                        count += 1
-                        break
-
-        if count > 0:
-            x = x_sum / count
-            y = y_sum / count
-        else:
-            # Unknown origin — place in center
-            x, y = 0.5, 0.5
-    else:
-        x, y = 0.5, 0.5
-
-    # Apply style offset
-    style_offset = STYLE_OFFSETS.get(name.age_style_category, 0.0)
-    y += style_offset
-
-    # Apply deterministic jitter based on canonical_name
-    jx, jy = _deterministic_jitter(name.canonical_name)
-    x += jx
-    y += jy
-
-    # Clamp to [0, 1]
-    x = max(0.0, min(1.0, x))
-    y = max(0.0, min(1.0, y))
-
-    return round(x, 6), round(y, 6)
+logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
-    help = "Compute 2D projections for all names (deterministic hash-based clustering by origin)."
+    help = "Compute 2D projections for names via PCA over Qdrant semantic vectors."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -128,24 +39,64 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         force = options["force"]
 
-        if force:
-            names = Name.objects.filter(active=True)
-        else:
-            names = Name.objects.filter(active=True, x_2d__isnull=True)
-
-        total = names.count()
-        if total == 0:
-            self.stdout.write(self.style.SUCCESS("All names already have projections."))
+        # Load all active names in a stable order by id so the PCA input matrix
+        # and persisted coordinates are independent of row arrival order (Req 3.3).
+        names = list(Name.objects.filter(active=True).order_by("id"))
+        if not names:
+            self.stdout.write(self.style.SUCCESS("No active names to project."))
             return
 
-        updated = 0
-        for name in names.iterator():
-            x, y = compute_position(name)
-            name.x_2d = x
-            name.y_2d = y
-            name.save(update_fields=["x_2d", "y_2d", "updated_at"])
-            updated += 1
+        # Retrieve semantic vectors from Qdrant. On failure, abort before any
+        # write so existing coordinates are never partially corrupted (Req 5).
+        name_ids = [str(name.id) for name in names]
+        try:
+            vectors = fetch_semantic_vectors(name_ids)
+        except (UnexpectedResponse, ConnectionError, TimeoutError) as exc:
+            logger.error("Semantic vector retrieval from Qdrant failed: %s", exc)
+            raise CommandError(
+                f"Aborting projection: semantic vector retrieval from Qdrant failed: {exc}"
+            ) from exc
+
+        # Partition into names that have a retrievable semantic vector and those
+        # that do not. Skipped names keep their existing coordinates (Req 4).
+        has_vector = [name for name in names if str(name.id) in vectors]
+        skipped = len(names) - len(has_vector)
+
+        if len(has_vector) < INSUFFICIENT_VECTORS:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"Insufficient vectors to project: {len(has_vector)} name(s) have "
+                    f"a retrievable semantic vector (need at least {INSUFFICIENT_VECTORS}). "
+                    "No coordinates were written."
+                )
+            )
+            return
+
+        # Build the PCA input matrix from ALL has-vector names regardless of
+        # --force, so the flag changes only which results are persisted, not the
+        # projection itself (Req 6.3). Rows are in id order, matching has_vector.
+        matrix = [vectors[str(name.id)] for name in has_vector]
+        coords = normalize_axes(pca_project_2d(matrix))
+
+        # Select which names to persist based on the --force flag (Req 6.1, 6.2).
+        # With --force: overwrite all has-vector names. Without: only fill names
+        # whose stored x_2d is null (a stored 0.0 is a valid coordinate and is
+        # left untouched).
+        selected: list[Name] = []
+        for name, (x, y) in zip(has_vector, coords):
+            if force or name.x_2d is None:
+                name.x_2d = x
+                name.y_2d = y
+                selected.append(name)
+
+        if selected:
+            with transaction.atomic():
+                Name.objects.bulk_update(selected, ["x_2d", "y_2d"])
 
         self.stdout.write(
-            self.style.SUCCESS(f"Computed projections for {updated} names.")
+            self.style.SUCCESS(
+                f"Projected {len(has_vector)} name(s); "
+                f"skipped {skipped} (no semantic vector); "
+                f"wrote {len(selected)} coordinate(s)."
+            )
         )

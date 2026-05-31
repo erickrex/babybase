@@ -211,6 +211,7 @@ class DeckMode(models.TextChoices):
     BRIDGE_NAMES = "bridge_names", "Bridge Names"
     MORE_LIKE_THIS = "more_like_this", "More Like This"
     WILDCARD = "wildcard", "Wildcard"
+    CROSS_CULTURAL = "cross_cultural", "Names That Travel"
 
 
 class LengthCategory(models.TextChoices):

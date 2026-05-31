@@ -11,6 +11,7 @@ from django.utils import timezone
 from core.models import (
     Couple,
     CoupleStatus,
+    DeckMode,
     Name,
     OnboardingResponse,
     RecommendationDeck,
@@ -19,10 +20,13 @@ from core.models import (
 )
 from core.services.recommendations import (
     _apply_diversity_constraints,
+    _apply_mode_score_adjustments,
+    _build_explanation,
     _build_payload_filters,
     _get_excluded_name_ids,
     _interleave_by_first_letter,
     _rerank_candidates,
+    _vector_name_for_mode,
     generate_deck,
     get_cached_deck,
 )
@@ -695,3 +699,166 @@ class TestRelaxedDiversityConstraints:
         # With relaxed=True, all 50 should be selected (high-score bypass + doubled limits)
         relaxed_result = _apply_diversity_constraints(candidates, deck_size=50, relaxed=True)
         assert len(relaxed_result) == 50
+
+
+def _make_cross_cultural_candidate(
+    name: Name, score: float = 0.8, international_score: float = 0.6
+) -> dict:
+    """Helper to build a Qdrant candidate carrying an international_score payload field."""
+    candidate = _make_qdrant_candidate(name, score)
+    candidate["payload"]["international_score"] = international_score
+    return candidate
+
+
+class TestCrossCulturalMode:
+    """Tests for the cross-cultural deck mode (Feature B)."""
+
+    def test_vector_name_for_mode_maps_cross_cultural_and_defaults(self):
+        """cross_cultural maps to the cross_cultural vector; all other modes use semantic."""
+        assert _vector_name_for_mode(DeckMode.CROSS_CULTURAL) == "cross_cultural"
+        assert _vector_name_for_mode(DeckMode.BEST_MATCH) == "semantic"
+        assert _vector_name_for_mode(DeckMode.BRIDGE_NAMES) == "semantic"
+        assert _vector_name_for_mode(DeckMode.MORE_LIKE_THIS) == "semantic"
+        assert _vector_name_for_mode(DeckMode.WILDCARD) == "semantic"
+
+    @patch("core.services.recommendations.search_names")
+    @patch("core.services.qdrant_client._average_vectors")
+    @patch("core.services.onboarding._get_liked_cross_cultural_vectors")
+    def test_generate_deck_cross_cultural_mutual_likes_averages_vectors(
+        self,
+        mock_liked,
+        mock_average,
+        mock_search,
+        couple_with_onboarding,
+        sample_names,
+    ):
+        """Mutual-likes path averages cross_cultural vectors and searches that named vector."""
+        couple, _, _ = couple_with_onboarding
+
+        mock_liked.return_value = [[0.1] * 1024, [0.2] * 1024]
+        mock_average.return_value = [0.15] * 1024
+        candidates = [
+            _make_cross_cultural_candidate(n, 0.9 - i * 0.1)
+            for i, n in enumerate(sample_names)
+        ]
+        mock_search.return_value = candidates
+
+        deck = generate_deck(couple, mode="cross_cultural")
+
+        assert deck.mode == "cross_cultural"
+        assert deck.items.count() > 0
+        # Mutual cross_cultural likes are fetched and averaged for the query embedding.
+        mock_liked.assert_called_once_with(couple, mutual_only=True)
+        mock_average.assert_called_once_with([[0.1] * 1024, [0.2] * 1024])
+        # Every Qdrant search uses the cross_cultural named vector.
+        assert mock_search.call_args_list
+        assert all(
+            call.kwargs.get("vector_name") == "cross_cultural"
+            for call in mock_search.call_args_list
+        )
+
+    @patch("core.services.recommendations.search_names")
+    @patch("core.services.embeddings.generate_embedding")
+    @patch("core.services.onboarding._get_liked_cross_cultural_vectors")
+    def test_generate_deck_cross_cultural_fallback_embeds_profile_text(
+        self,
+        mock_liked,
+        mock_generate_embedding,
+        mock_search,
+        couple_with_onboarding,
+        sample_names,
+    ):
+        """With no mutual cross_cultural likes, the deck falls back to embedding profile text."""
+        couple, _, _ = couple_with_onboarding
+
+        mock_liked.return_value = []
+        mock_generate_embedding.return_value = [0.05] * 1024
+        candidates = [
+            _make_cross_cultural_candidate(n, 0.85 - i * 0.1)
+            for i, n in enumerate(sample_names)
+        ]
+        mock_search.return_value = candidates
+
+        deck = generate_deck(couple, mode="cross_cultural")
+
+        assert deck.mode == "cross_cultural"
+        assert deck.items.count() > 0
+        # Fallback embeds the couple profile text via generate_embedding.
+        mock_generate_embedding.assert_called_once()
+        # Search still targets the cross_cultural named vector.
+        assert mock_search.call_args_list
+        assert all(
+            call.kwargs.get("vector_name") == "cross_cultural"
+            for call in mock_search.call_args_list
+        )
+
+    def test_cross_cultural_adjustment_is_monotonic_in_international_score(self):
+        # Feature: constellation-and-cross-cultural-mode, Property 8: Cross-cultural adjustment is monotonic
+        """Higher international_score yields a higher final score for equal base inputs."""
+        base = dict(
+            mode=DeckMode.CROSS_CULTURAL,
+            final=0.5,
+            semantic=0.6,
+            couple_overlap=0.4,
+            filter_fit=0.3,
+            bridge=0.2,
+            novelty=0.1,
+            diversity=0.1,
+        )
+
+        low = _apply_mode_score_adjustments(**base, payload={"international_score": 0.2})
+        high = _apply_mode_score_adjustments(**base, payload={"international_score": 0.8})
+
+        assert high > low
+        # The base weighted formula's inputs are untouched; only an additive bonus is applied.
+        assert high > base["final"]
+        assert low > base["final"]
+
+    def test_cross_cultural_adjustment_missing_score_is_neutral(self):
+        # Feature: constellation-and-cross-cultural-mode, Property 7: Missing international_score is neutral
+        """A missing or non-numeric international_score adds 0.0 and never raises."""
+        base = dict(
+            mode=DeckMode.CROSS_CULTURAL,
+            final=0.5,
+            semantic=0.6,
+            couple_overlap=0.4,
+            filter_fit=0.3,
+            bridge=0.2,
+            novelty=0.1,
+            diversity=0.1,
+        )
+
+        # Payload present but no international_score key.
+        assert _apply_mode_score_adjustments(**base, payload={}) == 0.5
+        # No payload at all.
+        assert _apply_mode_score_adjustments(**base, payload=None) == 0.5
+        # Default payload argument omitted entirely.
+        assert _apply_mode_score_adjustments(**base) == 0.5
+        # Non-numeric value is treated as neutral.
+        assert _apply_mode_score_adjustments(**base, payload={"international_score": "high"}) == 0.5
+
+    def test_build_explanation_cross_cultural_references_usability(self):
+        """The cross-cultural explanation references how many languages a name travels across."""
+        payload = {
+            "languages": ["en", "es", "fr"],
+            "international_score": 0.6,
+            "origin_backgrounds": ["Spanish", "French"],
+            "age_style_category": "classic",
+        }
+
+        explanation = _build_explanation(payload, DeckMode.CROSS_CULTURAL)
+
+        assert "Travels well" in explanation
+        assert "3 languages" in explanation
+
+    def test_build_explanation_cross_cultural_omits_framing_without_signals(self):
+        """Without languages or an international_score, the neutral default template is used."""
+        payload = {
+            "origin_backgrounds": ["Spanish"],
+            "age_style_category": "classic",
+        }
+
+        explanation = _build_explanation(payload, DeckMode.CROSS_CULTURAL)
+
+        assert "Travels well" not in explanation
+        assert "used across" in explanation

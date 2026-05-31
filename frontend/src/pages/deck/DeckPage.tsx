@@ -3,17 +3,18 @@ import SwipeDeck from '../../components/swipe/SwipeDeck';
 import MatchCelebration from '../../components/swipe/MatchCelebration';
 import { useDeck } from '../../hooks/useDeck';
 
-type DeckModeOption = 'best_match' | 'bridge_names' | 'wildcard';
+type DeckModeOption = 'best_match' | 'bridge_names' | 'wildcard' | 'cross_cultural';
 
 const MODE_OPTIONS: { value: DeckModeOption; label: string; icon: string }[] = [
   { value: 'best_match', label: 'Best Match', icon: '✨' },
   { value: 'bridge_names', label: 'Bridge Names', icon: '🌉' },
+  { value: 'cross_cultural', label: 'Travels', icon: '🌍' },
   { value: 'wildcard', label: 'Wildcards', icon: '🎲' },
 ];
 
 /**
  * Main deck page — integrates useDeck + SwipeDeck + MatchCelebration.
- * Includes mode toggle for Best Match / Bridge Names / Wildcards.
+ * Includes mode toggle for Best Match / Bridge Names / Travels / Wildcards.
  */
 export default function DeckPage() {
   const [selectedMode, setSelectedMode] = useState<DeckModeOption>('best_match');
@@ -125,6 +126,13 @@ export default function DeckPage() {
         <div className="w-full max-w-[420px] mb-3 px-3 py-2 rounded-lg bg-primary-muted border border-primary/20">
           <p className="text-xs text-primary-dark text-center">
             🌉 Names that bridge both your backgrounds
+          </p>
+        </div>
+      )}
+      {selectedMode === 'cross_cultural' && (
+        <div className="w-full max-w-[420px] mb-3 px-3 py-2 rounded-lg bg-primary-muted border border-primary/20">
+          <p className="text-xs text-primary-dark text-center">
+            🌍 Names that travel across languages and cultures
           </p>
         </div>
       )}

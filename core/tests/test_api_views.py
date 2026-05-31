@@ -299,6 +299,48 @@ class TestAuthViews:
         assert response.status_code == 200
         assert response.data["data"]["user"]["email"] == "mixed@test.com"
 
+    def test_register_captures_first_and_last_name(self, db):
+        """Registration stores first/last name and returns them in the user payload."""
+        client = APIClient()
+
+        response = client.post(
+            "/api/v1/auth/register/",
+            {
+                "email": "named@test.com",
+                "password": "StrongerPass123",
+                "password_confirm": "StrongerPass123",
+                "first_name": "Alex",
+                "last_name": "Rivera",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201
+        user_data = response.data["data"]["user"]
+        assert user_data["first_name"] == "Alex"
+        assert user_data["last_name"] == "Rivera"
+
+        user = User.objects.get(email="named@test.com")
+        assert user.first_name == "Alex"
+        assert user.last_name == "Rivera"
+
+    def test_register_without_names_still_succeeds(self, db):
+        """First/last name are optional at the API level; registration still works."""
+        client = APIClient()
+
+        response = client.post(
+            "/api/v1/auth/register/",
+            {
+                "email": "noname@test.com",
+                "password": "StrongerPass123",
+                "password_confirm": "StrongerPass123",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201
+        assert response.data["data"]["user"]["first_name"] == ""
+
     @pytest.mark.skip(reason="AUTH_PASSWORD_VALIDATORS disabled in dev; re-enable when validators are restored")
     def test_register_rejects_common_password(self, db):
         client = APIClient()
@@ -594,3 +636,116 @@ class TestGenerateDeckView:
 
         assert response.status_code == 400
         assert "complete onboarding" in response.data["message"]
+
+
+class TestCrossCulturalDeckView:
+    """Regression tests for cross-cultural deck mode caching and contract semantics."""
+
+    @patch("core.services.recommendations.search_names")
+    @patch("core.services.onboarding._get_liked_cross_cultural_vectors")
+    @patch("core.services.embeddings.generate_embedding")
+    def test_cross_cultural_first_call_201_then_cached_200(
+        self,
+        mock_generate_embedding,
+        mock_liked_vectors,
+        mock_search,
+        api_couple,
+    ):
+        couple, user_a, _ = api_couple
+        client = api_client_for(user_a)
+        # Force the fallback embedding path (no mutual cross_cultural likes) and
+        # keep the embedding fully mocked so no Bedrock/Qdrant calls are made.
+        mock_liked_vectors.return_value = []
+        mock_generate_embedding.return_value = [0.1] * 1024
+
+        name = Name.objects.create(
+            canonical_name="ApiCrossCulturalName",
+            display_name="Api Cross Cultural Name",
+            gender_usage=["boy"],
+            origin_backgrounds=["German"],
+            languages=["de", "en", "es", "fr", "it"],
+            scripts=["Latin"],
+            variants=[],
+            length_category="short",
+            age_style_category="classic",
+            historical_significance_score=0.5,
+            semantic_summary="Cross-cultural deck regression test name.",
+            active=True,
+        )
+        candidate = _make_candidate(name, 0.9)
+        candidate["payload"]["international_score"] = 1.0
+        mock_search.return_value = [candidate]
+
+        first = client.post(
+            "/api/v1/recommendations/deck/",
+            {"mode": "cross_cultural"},
+            format="json",
+        )
+        second = client.post(
+            "/api/v1/recommendations/deck/",
+            {"mode": "cross_cultural"},
+            format="json",
+        )
+
+        assert first.status_code == 201
+        assert first.data["status"] == "success"
+        assert first.data["data"]["cached"] is False
+        assert second.status_code == 200
+        assert second.data["status"] == "success"
+        assert second.data["data"]["cached"] is True
+        assert first.data["data"]["id"] == second.data["data"]["id"]
+        assert mock_search.call_count == 1
+        assert couple.decks.count() == 1
+
+    @patch("core.services.recommendations.search_names")
+    @patch("core.services.onboarding._get_liked_cross_cultural_vectors")
+    @patch("core.services.embeddings.generate_embedding")
+    def test_cross_cultural_force_refresh_regenerates(
+        self,
+        mock_generate_embedding,
+        mock_liked_vectors,
+        mock_search,
+        api_couple,
+    ):
+        couple, user_a, _ = api_couple
+        client = api_client_for(user_a)
+        mock_liked_vectors.return_value = []
+        mock_generate_embedding.return_value = [0.1] * 1024
+
+        name = Name.objects.create(
+            canonical_name="ApiCrossCulturalRefreshName",
+            display_name="Api Cross Cultural Refresh Name",
+            gender_usage=["boy"],
+            origin_backgrounds=["German"],
+            languages=["de", "en", "es", "fr", "it"],
+            scripts=["Latin"],
+            variants=[],
+            length_category="short",
+            age_style_category="classic",
+            historical_significance_score=0.5,
+            semantic_summary="Cross-cultural force-refresh regression test name.",
+            active=True,
+        )
+        candidate = _make_candidate(name, 0.9)
+        candidate["payload"]["international_score"] = 1.0
+        mock_search.return_value = [candidate]
+
+        first = client.post(
+            "/api/v1/recommendations/deck/",
+            {"mode": "cross_cultural"},
+            format="json",
+        )
+        second = client.post(
+            "/api/v1/recommendations/deck/",
+            {"mode": "cross_cultural", "force_refresh": True},
+            format="json",
+        )
+
+        assert first.status_code == 201
+        assert first.data["data"]["cached"] is False
+        assert second.status_code == 201
+        assert second.data["status"] == "success"
+        assert second.data["data"]["cached"] is False
+        assert first.data["data"]["id"] != second.data["data"]["id"]
+        assert mock_search.call_count == 2
+        assert couple.decks.count() == 2

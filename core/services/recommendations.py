@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 DECK_SIZE = 50
 # Retrieve more candidates than needed for re-ranking
 RETRIEVAL_MULTIPLIER = 2
+# Additive re-rank bonus weight for cross-cultural mode (mirrors bridge/wildcard scale)
+W_CROSS_CULTURAL = 0.20
 
 
 class DeckEligibilityError(Exception):
@@ -125,6 +127,7 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
     # Step 1: Build query embedding based on mode
     logger.info("Building new deck: couple=%s mode=%s", couple.id, mode)
     embedding = _build_query_embedding_for_mode(couple, mode)
+    vector_name = _vector_name_for_mode(mode)
 
     # Track whether Phase D was used (for sparse retrieval fallback)
     phase_used = None
@@ -156,7 +159,7 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
         filters=filters,
         limit=retrieval_limit,
         exclude_ids=excluded_point_ids,
-        vector_name="semantic",
+        vector_name=vector_name,
     )
 
     if not candidates:
@@ -167,7 +170,7 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
             filters={"active": True},
             limit=retrieval_limit,
             exclude_ids=excluded_point_ids,
-            vector_name="semantic",
+            vector_name=vector_name,
         )
 
     # Step 4b: Sparse retrieval fallback — if Phase D was used and top score < 0.6,
@@ -192,7 +195,7 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
                 filters=filters,
                 limit=retrieval_limit,
                 exclude_ids=excluded_point_ids,
-                vector_name="semantic",
+                vector_name=vector_name,
             )
             if not candidates:
                 logger.warning(
@@ -204,7 +207,7 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
                     filters={"active": True},
                     limit=retrieval_limit,
                     exclude_ids=excluded_point_ids,
-                    vector_name="semantic",
+                    vector_name=vector_name,
                 )
 
     # Compute top_retrieval_score from final candidates
@@ -278,6 +281,13 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
     return deck
 
 
+def _vector_name_for_mode(mode: str) -> str:
+    """Return the Qdrant named vector to search for a given deck mode."""
+    if mode == DeckMode.CROSS_CULTURAL:
+        return "cross_cultural"
+    return "semantic"
+
+
 def _build_query_embedding_for_mode(couple: Couple, mode: str) -> list[float]:
     """Build the appropriate query embedding based on the recommendation mode."""
     if mode == DeckMode.BEST_MATCH:
@@ -314,6 +324,23 @@ def _build_query_embedding_for_mode(couple: Couple, mode: str) -> list[float]:
             return _average_vectors(mutual_vectors)
         # Fall back to standard couple embedding
         return build_couple_query_embedding(couple)
+
+    elif mode == DeckMode.CROSS_CULTURAL:
+        # Average the cross_cultural vectors of mutual likes
+        from core.services.embeddings import generate_embedding
+        from core.services.onboarding import (
+            _get_liked_cross_cultural_vectors,
+            build_couple_profile_text,
+        )
+        from core.services.qdrant_client import _average_vectors
+
+        mutual_vectors = _get_liked_cross_cultural_vectors(couple, mutual_only=True)
+        if mutual_vectors:
+            return _average_vectors(mutual_vectors)
+        # Fall back: embed the couple profile text and search the cross_cultural space
+        profile = build_couple_retrieval_profile(couple)
+        text = build_couple_profile_text(profile)
+        return generate_embedding(text)
 
     elif mode == DeckMode.WILDCARD:
         # Use couple embedding but we'll increase distance threshold in retrieval
@@ -453,6 +480,7 @@ def _rerank_candidates(
                 bridge=signals["bridge"],
                 novelty=n_score,
                 diversity=d_score,
+                payload=payload,
             )
 
             candidate["rerank_score"] = final
@@ -486,6 +514,7 @@ def _apply_mode_score_adjustments(
     bridge: float,
     novelty: float,
     diversity: float,
+    payload: dict | None = None,
 ) -> float:
     """Apply mode-specific reranking adjustments to the base final score."""
     if mode == DeckMode.BRIDGE_NAMES:
@@ -496,6 +525,12 @@ def _apply_mode_score_adjustments(
         latent_compat = (couple_overlap + filter_fit + bridge) / 3.0
         serendipity_bonus = max(0.0, latent_compat - direct_sim) * 0.20
         return final + diversity * 0.10 + novelty * 0.10 + serendipity_bonus
+
+    if mode == DeckMode.CROSS_CULTURAL:
+        data = payload or {}
+        intl = data.get("international_score")
+        intl = float(intl) if isinstance(intl, (int, float)) else 0.0
+        return final + intl * W_CROSS_CULTURAL
 
     return final
 
@@ -681,6 +716,17 @@ def _build_explanation(payload: dict, mode: str) -> str:
         return (
             f"Wildcard Pick! {style_text.capitalize()} name from {origins_text} tradition"
             f" — a surprising find outside your usual picks."
+        )
+    elif mode == DeckMode.CROSS_CULTURAL:
+        languages = payload.get("languages") or []
+        intl = payload.get("international_score") or 0.0
+        if not languages and not intl:
+            # Can't substantiate cross-cultural benefit -> neutral default template
+            return f"{style_text.capitalize()} name used across {origins_text} contexts."
+        lang_count = len(languages)
+        return (
+            f"Travels well — used across {lang_count} languages"
+            f" with {origins_text} roots."
         )
     else:
         return f"{style_text.capitalize()} name used across {origins_text} contexts."

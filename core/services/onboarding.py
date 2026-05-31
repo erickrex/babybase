@@ -99,8 +99,13 @@ def compute_bridge_centroid(couple: Couple) -> list[float]:
     return build_couple_query_embedding(couple)
 
 
-def _fetch_vectors_for_name_ids(name_ids: list[str]) -> list[list[float]]:
-    """Fetch semantic vectors from Qdrant for a list of name IDs."""
+def _fetch_vectors_for_name_ids(
+    name_ids: list[str], vector_name: str = "semantic"
+) -> list[list[float]]:
+    """Fetch a named vector from Qdrant for a list of name IDs.
+
+    Defaults to the ``semantic`` named vector so existing callers are unchanged.
+    """
     from django.conf import settings
 
     from core.models import NameVectorIndexRef
@@ -119,16 +124,20 @@ def _fetch_vectors_for_name_ids(name_ids: list[str]) -> list[list[float]]:
     points = client.retrieve(
         collection_name=settings.QDRANT_COLLECTION,
         ids=[str(pid) for pid in point_ids],
-        with_vectors=["semantic"],
+        with_vectors=[vector_name],
     )
 
-    return [p.vector["semantic"] for p in points if p.vector and "semantic" in p.vector]
+    return [p.vector[vector_name] for p in points if p.vector and vector_name in p.vector]
 
 
-def _get_liked_vectors_for_couple(couple: Couple, mutual_only: bool = False) -> list[list[float]]:
+def _get_liked_vectors_for_couple(
+    couple: Couple, mutual_only: bool = False, vector_name: str = "semantic"
+) -> list[list[float]]:
     """
-    Fetch semantic vectors for names liked by the couple.
+    Fetch named vectors for names liked by the couple.
 
+    Defaults to the ``semantic`` named vector. Pass ``vector_name`` to retrieve a
+    different named vector (e.g. ``"cross_cultural"``) for the same liked names.
     If mutual_only=True, only returns vectors for names liked by BOTH parents.
     """
     try:
@@ -152,15 +161,30 @@ def _get_liked_vectors_for_couple(couple: Couple, mutual_only: bool = False) -> 
         if not name_ids:
             return []
 
-        return _fetch_vectors_for_name_ids(name_ids)
+        return _fetch_vectors_for_name_ids(name_ids, vector_name=vector_name)
     except (UnexpectedResponse, ConnectionError, TimeoutError) as exc:
         logger.error(
-            "Failed to fetch liked vectors for couple %s (mutual_only=%s): %s",
+            "Failed to fetch liked vectors for couple %s (vector=%s, mutual_only=%s): %s",
             couple.id,
+            vector_name,
             mutual_only,
             exc,
         )
         return []
+
+
+def _get_liked_cross_cultural_vectors(
+    couple: Couple, mutual_only: bool = False
+) -> list[list[float]]:
+    """Fetch ``cross_cultural`` vectors for names liked by the couple.
+
+    Thin wrapper over :func:`_get_liked_vectors_for_couple` that selects the
+    ``cross_cultural`` named vector. If mutual_only=True, only returns vectors
+    for names liked by BOTH parents.
+    """
+    return _get_liked_vectors_for_couple(
+        couple, mutual_only=mutual_only, vector_name="cross_cultural"
+    )
 
 
 def _get_liked_vectors_for_user(couple: Couple, user) -> list[list[float]]:
