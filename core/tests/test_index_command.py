@@ -278,3 +278,134 @@ def test_payload_index_creation_failures_do_not_abort(mock_get_client):
 
     # All four index creation attempts were made
     assert mock_client.create_payload_index.call_count == 4
+
+
+def _make_indexable_name() -> Name:
+    """Create one active name with no index ref so it is picked up for indexing."""
+    return Name.objects.create(
+        canonical_name="Mila",
+        display_name="Mila",
+        gender_usage=["girl"],
+        origin_backgrounds=["Slavic"],
+        languages=["ru", "en"],
+        scripts=["Latin", "Cyrillic"],
+        variants=[],
+        length_category="short",
+        age_style_category="modern",
+        historical_significance_score=0.5,
+        semantic_summary="A modern name.",
+        active=True,
+    )
+
+
+def _existing_collection_client() -> MagicMock:
+    """A mocked Qdrant client whose collection already exists with correct dims."""
+    mock_client = MagicMock()
+    vector_config = MagicMock()
+    vector_config.size = VECTOR_DIM
+
+    vectors_config = MagicMock()
+    vectors_config.get.return_value = vector_config
+
+    collection_info = MagicMock()
+    collection_info.config.params.vectors = vectors_config
+    mock_client.get_collection.return_value = collection_info
+
+    existing = MagicMock()
+    existing.name = COLLECTION_NAME
+    collections_response = MagicMock()
+    collections_response.collections = [existing]
+    mock_client.get_collections.return_value = collections_response
+    return mock_client
+
+
+class TestProjectionRefreshAfterIndexing:
+    """Indexing chains a constellation projection refresh unless opted out."""
+
+    @staticmethod
+    def _run(skip_projection: bool = False):
+        """Invoke the command's handle() directly with explicit options.
+
+        Driving handle() directly (rather than via call_command) keeps the test's
+        own invocation separate from the command's internal call_command, so the
+        patched call_command only observes the projection refresh.
+        """
+        command = Command()
+        command.handle(
+            force_recreate=False,
+            batch_size=10,
+            skip_projection=skip_projection,
+        )
+
+    @override_settings(QDRANT_COLLECTION=COLLECTION_NAME)
+    @patch("django.core.management.call_command")
+    @patch("core.management.commands.index_names_to_qdrant.generate_embeddings_batch")
+    @patch("core.management.commands.index_names_to_qdrant.get_qdrant_client")
+    def test_indexing_triggers_force_projection(
+        self, mock_get_client, mock_embeddings, mock_call_command, db
+    ):
+        """After a successful index, compute_projections runs with --force."""
+        _make_indexable_name()
+        mock_get_client.return_value = _existing_collection_client()
+        mock_embeddings.return_value = [[0.0] * VECTOR_DIM]
+
+        self._run()
+
+        projection_calls = [
+            c for c in mock_call_command.call_args_list if c.args and c.args[0] == "compute_projections"
+        ]
+        assert len(projection_calls) == 1
+        assert "--force" in projection_calls[0].args
+
+    @override_settings(QDRANT_COLLECTION=COLLECTION_NAME)
+    @patch("django.core.management.call_command")
+    @patch("core.management.commands.index_names_to_qdrant.generate_embeddings_batch")
+    @patch("core.management.commands.index_names_to_qdrant.get_qdrant_client")
+    def test_skip_projection_flag_suppresses_refresh(
+        self, mock_get_client, mock_embeddings, mock_call_command, db
+    ):
+        """--skip-projection prevents the projection refresh from running."""
+        _make_indexable_name()
+        mock_get_client.return_value = _existing_collection_client()
+        mock_embeddings.return_value = [[0.0] * VECTOR_DIM]
+
+        self._run(skip_projection=True)
+
+        projection_calls = [
+            c for c in mock_call_command.call_args_list if c.args and c.args[0] == "compute_projections"
+        ]
+        assert projection_calls == []
+
+    @override_settings(QDRANT_COLLECTION=COLLECTION_NAME)
+    @patch("django.core.management.call_command")
+    @patch("core.management.commands.index_names_to_qdrant.generate_embeddings_batch")
+    @patch("core.management.commands.index_names_to_qdrant.get_qdrant_client")
+    def test_projection_failure_does_not_fail_indexing(
+        self, mock_get_client, mock_embeddings, mock_call_command, db
+    ):
+        """A projection error is swallowed so the successful index is not rolled back."""
+        _make_indexable_name()
+        mock_get_client.return_value = _existing_collection_client()
+        mock_embeddings.return_value = [[0.0] * VECTOR_DIM]
+        mock_call_command.side_effect = RuntimeError("Qdrant unreachable during projection")
+
+        # Should not raise despite the projection step failing.
+        self._run()
+
+        # The name was still indexed (ref persisted) even though projection failed.
+        assert NameVectorIndexRef.objects.filter(qdrant_collection=COLLECTION_NAME).count() == 1
+
+    @override_settings(QDRANT_COLLECTION=COLLECTION_NAME)
+    @patch("django.core.management.call_command")
+    @patch("core.management.commands.index_names_to_qdrant.get_qdrant_client")
+    def test_no_names_to_index_skips_projection(self, mock_get_client, mock_call_command, db):
+        """When there is nothing to index, the projection step is not triggered."""
+        mock_get_client.return_value = _existing_collection_client()
+        # No active names created, so nothing to index.
+
+        self._run()
+
+        projection_calls = [
+            c for c in mock_call_command.call_args_list if c.args and c.args[0] == "compute_projections"
+        ]
+        assert projection_calls == []

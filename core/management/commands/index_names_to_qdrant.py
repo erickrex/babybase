@@ -45,11 +45,22 @@ class Command(BaseCommand):
             default=DEFAULT_BATCH_SIZE,
             help=f"Number of names to embed and upsert per batch (default: {DEFAULT_BATCH_SIZE}).",
         )
+        parser.add_argument(
+            "--skip-projection",
+            action="store_true",
+            default=False,
+            help=(
+                "Do not recompute 2D constellation projections after indexing. "
+                "By default, `compute_projections --force` runs once indexing succeeds "
+                "so the Name Map stays in sync with the freshly indexed vectors."
+            ),
+        )
 
     def handle(self, *args, **options):
         client = get_qdrant_client()
         force_recreate = options["force_recreate"]
         batch_size = max(options["batch_size"], 1)
+        skip_projection = options["skip_projection"]
         self.collection_name = settings.QDRANT_COLLECTION
 
         if force_recreate:
@@ -76,6 +87,34 @@ class Command(BaseCommand):
             self.stdout.write(f"  Indexed {total_indexed}/{len(names_to_index)}...")
 
         self.stdout.write(self.style.SUCCESS(f"Done. Indexed {total_indexed} names to Qdrant."))
+
+        # Step 4: Refresh 2D constellation projections so the Name Map reflects the
+        # freshly indexed vectors. Indexing changed the source vectors, so use
+        # --force to recompute coordinates for every name with a vector.
+        if not skip_projection:
+            self._recompute_projections()
+
+    def _recompute_projections(self) -> None:
+        """Recompute constellation projections after indexing.
+
+        Runs `compute_projections --force` via the management API. A projection
+        failure is logged and reported but does NOT fail the index run, since the
+        vectors were already upserted successfully; the projection can be re-run
+        on its own with `manage.py compute_projections`.
+        """
+        from django.core.management import call_command
+
+        self.stdout.write("Recomputing 2D projections for the Name Map (--force)...")
+        try:
+            call_command("compute_projections", "--force", stdout=self.stdout, stderr=self.stderr)
+        except Exception as exc:
+            logger.error("Projection refresh after indexing failed: %s", exc)
+            self.stdout.write(
+                self.style.WARNING(
+                    "Indexing succeeded but projection refresh failed: "
+                    f"{exc}. Run `manage.py compute_projections` manually to update the map."
+                )
+            )
 
     def _force_recreate(self, client):
         """Delete all index refs, recreate collection, and clear taste vectors."""

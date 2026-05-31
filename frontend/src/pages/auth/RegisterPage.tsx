@@ -10,6 +10,8 @@ interface ApiErrorResponse {
 }
 
 export default function RegisterPage() {
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
@@ -25,6 +27,11 @@ export default function RegisterPage() {
     setError('');
     setFieldErrors({});
 
+    if (!firstName.trim()) {
+      setError('Please enter your first name');
+      return;
+    }
+
     if (password !== passwordConfirm) {
       setError('Passwords do not match');
       return;
@@ -33,7 +40,7 @@ export default function RegisterPage() {
     setIsSubmitting(true);
 
     try {
-      await register(email, password, passwordConfirm);
+      await register(email, password, passwordConfirm, firstName.trim(), lastName.trim());
       navigate('/deck');
     } catch (err) {
       const axiosError = err as AxiosError<ApiErrorResponse>;
@@ -68,6 +75,41 @@ export default function RegisterPage() {
               {error}
             </div>
           )}
+
+          <div>
+            <label htmlFor="firstName" className="block text-sm font-medium text-text mb-1.5">
+              First Name
+            </label>
+            <input
+              id="firstName"
+              type="text"
+              required
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              className="block w-full rounded-xl border border-border bg-bg-card px-4 py-3 text-base text-text shadow-sm placeholder:text-text-muted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              placeholder="Alex"
+            />
+            {fieldErrors.first_name && (
+              <p className="mt-1.5 text-xs text-error">{fieldErrors.first_name[0]}</p>
+            )}
+          </div>
+
+          <div>
+            <label htmlFor="lastName" className="block text-sm font-medium text-text mb-1.5">
+              Last Name
+            </label>
+            <input
+              id="lastName"
+              type="text"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+              className="block w-full rounded-xl border border-border bg-bg-card px-4 py-3 text-base text-text shadow-sm placeholder:text-text-muted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              placeholder="Rivera"
+            />
+            {fieldErrors.last_name && (
+              <p className="mt-1.5 text-xs text-error">{fieldErrors.last_name[0]}</p>
+            )}
+          </div>
 
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-text mb-1.5">

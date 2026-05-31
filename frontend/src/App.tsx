@@ -76,8 +76,10 @@ function ProfileTabPage() {
     <div className="px-4 pt-6">
       <h1 className="text-xl font-bold text-text mb-4">Profile</h1>
       <div className="bg-bg-card rounded-xl border border-border p-4 shadow-card">
-        <p className="text-text font-medium">{user?.email}</p>
-        <p className="text-sm text-text-muted mt-1">{user?.first_name || 'No name set'}</p>
+        <p className="text-text font-medium">
+          {[user?.first_name, user?.last_name].filter(Boolean).join(' ') || user?.email}
+        </p>
+        <p className="text-sm text-text-muted mt-1">{user?.email}</p>
       </div>
 
       {/* Partner / invite section */}

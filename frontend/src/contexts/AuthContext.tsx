@@ -11,6 +11,7 @@ interface User {
   id: string;
   email: string;
   first_name?: string;
+  last_name?: string;
   role_in_pregnancy?: string;
 }
 
@@ -20,7 +21,13 @@ interface AuthContextType {
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, passwordConfirm: string) => Promise<void>;
+  register: (
+    email: string,
+    password: string,
+    passwordConfirm: string,
+    firstName: string,
+    lastName: string
+  ) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -67,12 +74,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = async (
     email: string,
     password: string,
-    passwordConfirm: string
+    passwordConfirm: string,
+    firstName: string,
+    lastName: string
   ) => {
     const response = await api.post('/auth/register/', {
       email,
       password,
       password_confirm: passwordConfirm,
+      first_name: firstName,
+      last_name: lastName,
     });
     const { user: userData, token: authToken } = response.data.data;
 
