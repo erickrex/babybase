@@ -10,6 +10,7 @@ import math
 import random
 import uuid
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from hypothesis import HealthCheck, assume, given, settings
@@ -529,6 +530,7 @@ class TestPhaseDSelectionIffAllThresholdsMet:
         from django.utils import timezone
 
         from core.models import Couple, CoupleStatus, UserTasteVector
+        from core.services import taste_vectors as taste_vectors_module
         from core.services.taste_vectors import select_phase
 
         User = get_user_model()
@@ -540,6 +542,11 @@ class TestPhaseDSelectionIffAllThresholdsMet:
             user_a=user_a, user_b=user_b, status=CoupleStatus.ACTIVE
         )
 
+        # Freeze the reference instant. select_phase derives staleness from
+        # timezone.now(); without freezing, the few milliseconds between this
+        # setup and that call push an exactly-30-day-old vector over the 30-day
+        # threshold, making the boundary flaky. Pinning now() to the same instant
+        # the vectors are dated from keeps the >= / <= 30 boundary deterministic.
         now = timezone.now()
         UserTasteVector.objects.create(
             user=user_a,
@@ -565,7 +572,8 @@ class TestPhaseDSelectionIffAllThresholdsMet:
         b_passes = swipe_b >= 20 and 0.1 <= rate_b <= 0.8 and days_b <= 30
         expected_phase_d = a_passes and b_passes
 
-        phase, _data = select_phase(couple)
+        with patch.object(taste_vectors_module.timezone, "now", return_value=now):
+            phase, _data = select_phase(couple)
 
         if expected_phase_d:
             assert phase == "phase_d", (
