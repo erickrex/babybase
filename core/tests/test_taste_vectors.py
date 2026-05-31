@@ -1379,3 +1379,167 @@ class TestDeckGenerationPhaseD:
         assert profile["phase_used"] == "phase_c"
         assert profile["user_a_confidence_score"] == 0.0
         assert profile["user_b_confidence_score"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Taste vector swipe-flow wiring: maybe_recompute_taste_vector + swipe_view
+# ---------------------------------------------------------------------------
+
+
+class TestMaybeRecomputeTasteVector:
+    """Unit tests for the batched recompute trigger."""
+
+    @pytest.fixture
+    def solo_swiper(self, db):
+        user = User.objects.create_user(email="batch_swiper@test.com", password="testpass123")
+        couple = Couple.objects.create(user_a=user, user_b=None, status=CoupleStatus.ACTIVE)
+        names = []
+        for i in range(10):
+            names.append(
+                Name.objects.create(
+                    canonical_name=f"Batch{i}",
+                    display_name=f"Batch {i}",
+                    gender_usage=["boy"],
+                    origin_backgrounds=["Spanish"],
+                    languages=["es"],
+                    scripts=["Latin"],
+                    variants=[],
+                    length_category="short",
+                    age_style_category="classic",
+                    historical_significance_score=0.5,
+                    semantic_summary="Test.",
+                    active=True,
+                )
+            )
+        return user, couple, names
+
+    @pytest.mark.django_db
+    @patch("core.services.taste_vectors.compute_taste_vector")
+    def test_skips_when_not_on_batch_boundary(self, mock_compute, solo_swiper):
+        """No recompute until the swipe count hits a batch multiple."""
+        from core.services.taste_vectors import maybe_recompute_taste_vector
+
+        user, couple, names = solo_swiper
+        # 4 swipes — below the batch size of 5
+        for i in range(4):
+            Swipe.objects.create(couple=couple, user=user, name=names[i], action=SwipeAction.LIKE)
+
+        attempted = maybe_recompute_taste_vector(user)
+
+        assert attempted is False
+        mock_compute.assert_not_called()
+
+    @pytest.mark.django_db
+    @patch("core.services.taste_vectors.compute_taste_vector")
+    def test_recomputes_on_batch_boundary(self, mock_compute, solo_swiper):
+        """A recompute is attempted exactly on a batch multiple."""
+        from core.services.taste_vectors import maybe_recompute_taste_vector
+
+        user, couple, names = solo_swiper
+        for i in range(5):
+            Swipe.objects.create(couple=couple, user=user, name=names[i], action=SwipeAction.LIKE)
+
+        attempted = maybe_recompute_taste_vector(user)
+
+        assert attempted is True
+        mock_compute.assert_called_once_with(user)
+
+    @pytest.mark.django_db
+    @patch("core.services.taste_vectors.compute_taste_vector")
+    def test_zero_swipes_skips(self, mock_compute, solo_swiper):
+        """A user with no swipes is never recomputed (0 is not a batch boundary)."""
+        from core.services.taste_vectors import maybe_recompute_taste_vector
+
+        user, _, _ = solo_swiper
+
+        attempted = maybe_recompute_taste_vector(user)
+
+        assert attempted is False
+        mock_compute.assert_not_called()
+
+    @pytest.mark.django_db
+    @patch("core.services.taste_vectors.compute_taste_vector", side_effect=RuntimeError("Qdrant down"))
+    def test_recompute_failure_is_swallowed(self, mock_compute, solo_swiper):
+        """A failing recompute never propagates to the caller."""
+        from core.services.taste_vectors import maybe_recompute_taste_vector
+
+        user, couple, names = solo_swiper
+        for i in range(5):
+            Swipe.objects.create(couple=couple, user=user, name=names[i], action=SwipeAction.LIKE)
+
+        # Must not raise despite the underlying failure.
+        attempted = maybe_recompute_taste_vector(user)
+
+        assert attempted is True
+        mock_compute.assert_called_once_with(user)
+
+
+class TestSwipeViewTriggersRecompute:
+    """Integration tests that the swipe API endpoint wires in the recompute."""
+
+    @pytest.fixture
+    def api_setup(self, db):
+        from rest_framework.authtoken.models import Token
+        from rest_framework.test import APIClient
+
+        user = User.objects.create_user(email="api_swiper@test.com", password="testpass123")
+        couple = Couple.objects.create(user_a=user, user_b=None, status=CoupleStatus.ACTIVE)
+        names = []
+        for i in range(6):
+            names.append(
+                Name.objects.create(
+                    canonical_name=f"ApiBatch{i}",
+                    display_name=f"Api Batch {i}",
+                    gender_usage=["boy"],
+                    origin_backgrounds=["Spanish"],
+                    languages=["es"],
+                    scripts=["Latin"],
+                    variants=[],
+                    length_category="short",
+                    age_style_category="classic",
+                    historical_significance_score=0.5,
+                    semantic_summary="Test.",
+                    active=True,
+                )
+            )
+        token, _ = Token.objects.get_or_create(user=user)
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+        return client, couple, user, names
+
+    @patch("core.views.swipes.maybe_recompute_taste_vector")
+    def test_new_swipe_triggers_recompute(self, mock_trigger, api_setup):
+        """A newly recorded swipe invokes the recompute trigger for the swiper."""
+        client, couple, user, names = api_setup
+
+        response = client.post(
+            "/api/v1/swipes/",
+            {"name_id": str(names[0].id), "action": "like"},
+            format="json",
+        )
+
+        assert response.status_code == 201
+        mock_trigger.assert_called_once_with(user)
+
+    @patch("core.views.swipes.maybe_recompute_taste_vector")
+    def test_duplicate_swipe_does_not_trigger_recompute(self, mock_trigger, api_setup):
+        """A duplicate swipe (no new record) does not trigger a recompute."""
+        client, couple, user, names = api_setup
+
+        first = client.post(
+            "/api/v1/swipes/",
+            {"name_id": str(names[0].id), "action": "like"},
+            format="json",
+        )
+        assert first.status_code == 201
+        mock_trigger.reset_mock()
+
+        # Same user + name → duplicate, returns 200 and should not re-trigger.
+        second = client.post(
+            "/api/v1/swipes/",
+            {"name_id": str(names[0].id), "action": "dislike"},
+            format="json",
+        )
+
+        assert second.status_code == 200
+        mock_trigger.assert_not_called()

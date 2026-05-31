@@ -21,6 +21,13 @@ TRUST_THRESHOLDS = {
     "min_retrieval_score": 0.6,
 }
 
+# Recompute a user's taste vector once every this many new swipes, rather than
+# on every individual swipe. Recomputation fetches all of the user's liked
+# embeddings from Qdrant, so batching keeps the swipe path cheap while still
+# refreshing the vector often enough to cross the Phase D trust threshold
+# (min_swipe_count = 20) on a batch boundary.
+TASTE_VECTOR_BATCH_SIZE = 5
+
 
 def check_trust_thresholds(taste_vector) -> tuple[bool, str | None]:
     """
@@ -269,6 +276,32 @@ def compute_taste_vector(user):
     )
 
     return taste_vector
+
+
+def maybe_recompute_taste_vector(user) -> bool:
+    """Recompute a user's taste vector on swipe-batch boundaries.
+
+    Intended to be called from the swipe flow after a new swipe is recorded.
+    To avoid fetching every liked embedding from Qdrant on every swipe, the
+    vector is only recomputed when the user's total swipe count is a positive
+    multiple of ``TASTE_VECTOR_BATCH_SIZE``.
+
+    This never raises into the caller: any failure (e.g. Qdrant unreachable) is
+    logged and swallowed so a recompute problem can never break a swipe.
+
+    Returns True if a recompute was attempted, False if it was skipped.
+    """
+    from core.models import Swipe
+
+    swipe_count = Swipe.objects.filter(user=user).count()
+    if swipe_count == 0 or swipe_count % TASTE_VECTOR_BATCH_SIZE != 0:
+        return False
+
+    try:
+        compute_taste_vector(user)
+    except Exception:
+        logger.exception("Failed to recompute taste vector for user %s", user.id)
+    return True
 
 
 def compute_confidence_score(

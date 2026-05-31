@@ -28,6 +28,7 @@ from core.services.swipes import (
     validate_source_deck,
     validate_swipe,
 )
+from core.services.taste_vectors import maybe_recompute_taste_vector
 from core.throttles import SwipeRateThrottle
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,9 @@ def swipe_view(request: Request) -> Response:
 
     if created:
         logger.debug("Swipe recorded: user=%s name=%s action=%s", request.user.email, name_id, action)
+        # Refresh the swiper's taste vector on batch boundaries (Phase D signal).
+        # Safe by contract: never raises into the swipe path.
+        maybe_recompute_taste_vector(request.user)
 
     return Response(
         {
