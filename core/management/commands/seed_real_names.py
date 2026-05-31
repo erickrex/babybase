@@ -32,14 +32,6 @@ BUNDLED_CSV_PATHS = (
     Path(__file__).resolve().parents[2] / "fixtures" / "ssa_2020_top500_boys_cultural_metadata.csv",
     Path(__file__).resolve().parents[2] / "fixtures" / "ssa_2020_top500_girls_cultural_metadata.csv",
 )
-ENRICHED_BUNDLED_CSV_PATHS = (
-    Path(__file__).resolve().parents[2] / "fixtures" / "ssa_2020_top500_boys_enriched.csv",
-    Path(__file__).resolve().parents[2] / "fixtures" / "ssa_2020_top500_girls_enriched.csv",
-)
-LEGACY_BUNDLED_CSV_PATHS = (
-    Path(__file__).resolve().parents[2] / "fixtures" / "ssa_2020_top500_boys.csv",
-    Path(__file__).resolve().parents[2] / "fixtures" / "ssa_2020_top500_girls.csv",
-)
 
 
 def _split_pipe(value: str | None) -> list[str]:
@@ -413,11 +405,6 @@ class Command(BaseCommand):
             stats = self._build_stats_from_zip_options(options)
         else:
             csv_paths = [Path(path) for path in (options["source_csv"] or BUNDLED_CSV_PATHS)]
-            # Cascade fallback: cultural_metadata -> enriched -> legacy
-            if not options["source_csv"] and not all(path.exists() for path in csv_paths):
-                csv_paths = [Path(path) for path in ENRICHED_BUNDLED_CSV_PATHS]
-            if not options["source_csv"] and not all(path.exists() for path in csv_paths):
-                csv_paths = [Path(path) for path in LEGACY_BUNDLED_CSV_PATHS]
             missing_paths = [str(path) for path in csv_paths if not path.exists()]
             if missing_paths:
                 raise CommandError(f"CSV seed file(s) not found: {', '.join(missing_paths)}")

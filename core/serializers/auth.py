@@ -13,7 +13,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "email", "first_name", "role_in_pregnancy", "age", "gender", "nationality"]
+        fields = ["id", "email", "first_name", "last_name", "role_in_pregnancy", "age", "gender", "nationality"]
         read_only_fields = fields
 
 
@@ -23,6 +23,8 @@ class RegisterSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(min_length=8, write_only=True)
     password_confirm = serializers.CharField(min_length=8, write_only=True)
+    first_name = serializers.CharField(max_length=150, required=False, allow_blank=True, default="")
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True, default="")
 
     def validate_email(self, value: str) -> str:
         email = value.lower()
@@ -44,6 +46,8 @@ class RegisterSerializer(serializers.Serializer):
         user = User.objects.create_user(
             email=validated_data["email"],
             password=validated_data["password"],
+            first_name=validated_data.get("first_name", "").strip(),
+            last_name=validated_data.get("last_name", "").strip(),
         )
         return user
 
