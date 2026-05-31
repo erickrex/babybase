@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import api from '../../services/api';
 import { colors } from '../../theme/tokens';
 
@@ -25,25 +25,6 @@ interface FeaturedName {
   reasons: string[];
   score: number;
   rank: number | null;
-}
-
-interface NamePoint {
-  id: string;
-  canonical_name: string;
-  display_name: string;
-  x: number;
-  y: number;
-  cluster: string;
-  origin_backgrounds: string[];
-  gender_usage: string[];
-  age_style_category: string;
-}
-
-interface Cluster {
-  label: string;
-  centroid_x: number;
-  centroid_y: number;
-  count: number;
 }
 
 interface TasteNeighborhood {
@@ -106,12 +87,7 @@ interface ConstellationData {
   };
   explore: {
     bubbles: ExploreBubble[];
-    featured_name_ids: string[];
-    all_name_count: number;
   };
-  names: NamePoint[];
-  clusters: Cluster[];
-  matched_name_ids: string[];
 }
 
 interface ApiError {
@@ -162,16 +138,23 @@ function colorForIndex(index: number): string {
   return BUBBLE_COLORS[index % BUBBLE_COLORS.length];
 }
 
-function colorForLabel(label: string): string {
-  const hash = Array.from(label).reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  return colorForIndex(hash);
-}
-
 function displayLabel(value: string): string {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function nameMeta(name: FeaturedName | NamePoint): string {
+function bubbleSummary(bubble: ExploreBubble): string {
+  const signals = [];
+  if (bubble.shortlisted_count > 0) {
+    signals.push(`${bubble.shortlisted_count} shortlisted`);
+  }
+  if (bubble.matched_count > 0) {
+    signals.push(`${bubble.matched_count} matched`);
+  }
+  signals.push(`${bubble.count} names`);
+  return signals.join(' · ');
+}
+
+function nameMeta(name: FeaturedName): string {
   const origins = name.origin_backgrounds.slice(0, 2).join(', ') || 'Global';
   const gender = name.gender_usage.join('/') || 'any';
   return `${origins} · ${displayLabel(name.age_style_category)} · ${gender}`;
@@ -182,8 +165,6 @@ export default function ConstellationPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<'insights' | 'explore'>('insights');
-  const [exploreMode, setExploreMode] = useState<'neighborhoods' | 'names'>('neighborhoods');
-  const [selectedName, setSelectedName] = useState<NamePoint | null>(null);
 
   useEffect(() => {
     void fetchConstellation();
@@ -203,7 +184,6 @@ export default function ConstellationPage() {
   }
 
   const stats = data?.summary.stats;
-  const matchedSet = useMemo(() => new Set(data?.matched_name_ids ?? []), [data]);
 
   if (isLoading) {
     return (
@@ -279,17 +259,7 @@ export default function ConstellationPage() {
       {view === 'insights' ? (
         <InsightsView data={data} stats={stats} />
       ) : (
-        <ExploreView
-          data={data}
-          mode={exploreMode}
-          matchedSet={matchedSet}
-          selectedName={selectedName}
-          onModeChange={(nextMode) => {
-            setExploreMode(nextMode);
-            setSelectedName(null);
-          }}
-          onSelectName={setSelectedName}
-        />
+        <ExploreView data={data} />
       )}
     </div>
   );
@@ -488,18 +458,8 @@ function TraitList({
 
 function ExploreView({
   data,
-  mode,
-  matchedSet,
-  selectedName,
-  onModeChange,
-  onSelectName,
 }: {
   data: ConstellationData;
-  mode: 'neighborhoods' | 'names';
-  matchedSet: Set<string>;
-  selectedName: NamePoint | null;
-  onModeChange: (mode: 'neighborhoods' | 'names') => void;
-  onSelectName: (name: NamePoint) => void;
 }) {
   const maxBubbleCount = Math.max(
     1,
@@ -508,135 +468,67 @@ function ExploreView({
 
   return (
     <section>
-      <div className="flex rounded-lg bg-bg-muted border border-border p-1 mb-4">
-        <button
-          type="button"
-          aria-pressed={mode === 'neighborhoods'}
-          onClick={() => onModeChange('neighborhoods')}
-          className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-            mode === 'neighborhoods'
-              ? 'bg-bg-card text-text shadow-sm'
-              : 'text-text-secondary'
-          }`}
-        >
-          Neighborhoods
-        </button>
-        <button
-          type="button"
-          aria-pressed={mode === 'names'}
-          onClick={() => onModeChange('names')}
-          className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-            mode === 'names'
-              ? 'bg-bg-card text-text shadow-sm'
-              : 'text-text-secondary'
-          }`}
-        >
-          Individual Names
-        </button>
+      <div className="mb-4">
+        <h2 className="text-base font-semibold text-text">Neighborhood Map</h2>
+        <p className="mt-1 text-sm text-text-secondary">
+          A simpler view of where your strongest taste groups sit relative to each other.
+        </p>
       </div>
 
       <div className="rounded-xl border border-border bg-bg-card overflow-hidden">
         <svg width="100%" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="block">
           <rect width={WIDTH} height={HEIGHT} fill={colors.bgCard} />
-          {mode === 'neighborhoods'
-            ? data.explore.bubbles.map((bubble, index) => {
-                const radius = 18 + (bubble.count / maxBubbleCount) * 18;
-                const fill = colorForIndex(index);
-                return (
-                  <g key={bubble.id}>
-                    <circle
-                      cx={toSvgX(bubble.centroid_x)}
-                      cy={toSvgY(bubble.centroid_y)}
-                      r={radius}
-                      fill={fill}
-                      opacity="0.22"
-                      stroke={fill}
-                      strokeWidth="2"
-                    />
-                    <text
-                      x={toSvgX(bubble.centroid_x)}
-                      y={toSvgY(bubble.centroid_y) + 4}
-                      textAnchor="middle"
-                      fontSize="12"
-                      fontWeight="700"
-                      fill={colors.text}
-                    >
-                      {bubble.count}
-                    </text>
-                  </g>
-                );
-              })
-            : data.names.map((name) => {
-                const isMatched = matchedSet.has(name.id);
-                return (
-                  <circle
-                    key={name.id}
-                    cx={toSvgX(name.x)}
-                    cy={toSvgY(name.y)}
-                    r={isMatched ? 5 : 3.5}
-                    fill={isMatched ? colors.matchGold : colorForLabel(name.cluster)}
-                    opacity={isMatched ? 1 : 0.72}
-                    stroke={colors.bgCard}
-                    strokeWidth="0.75"
-                    className="cursor-pointer"
-                    onClick={() => onSelectName(name)}
-                  />
-                );
-              })}
+          {data.explore.bubbles.map((bubble, index) => {
+            const radius = 18 + (bubble.count / maxBubbleCount) * 18;
+            const fill = colorForIndex(index);
+            return (
+              <g key={bubble.id}>
+                <circle
+                  cx={toSvgX(bubble.centroid_x)}
+                  cy={toSvgY(bubble.centroid_y)}
+                  r={radius}
+                  fill={fill}
+                  opacity="0.22"
+                  stroke={fill}
+                  strokeWidth="2"
+                />
+                <text
+                  x={toSvgX(bubble.centroid_x)}
+                  y={toSvgY(bubble.centroid_y) + 4}
+                  textAnchor="middle"
+                  fontSize="12"
+                  fontWeight="700"
+                  fill={colors.text}
+                >
+                  {bubble.count}
+                </text>
+              </g>
+            );
+          })}
         </svg>
       </div>
 
-      {mode === 'neighborhoods' ? (
-        <div className="mt-4 space-y-2">
-          {data.explore.bubbles.map((bubble, index) => (
-            <div
-              key={bubble.id}
-              className="flex items-center justify-between rounded-xl border border-border bg-bg-card px-3 py-2"
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <span
-                  className="h-2.5 w-2.5 rounded-full shrink-0"
-                  style={{ backgroundColor: colorForIndex(index) }}
-                />
-                <span className="text-sm font-medium text-text truncate">
-                  {bubble.label}
-                </span>
-              </div>
-              <span className="text-xs text-text-muted shrink-0">
-                {bubble.count} names
+      <div className="mt-4 space-y-2">
+        {data.explore.bubbles.map((bubble, index) => (
+          <div
+            key={bubble.id}
+            className="flex items-center justify-between rounded-xl border border-border bg-bg-card px-3 py-2"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <span
+                className="h-2.5 w-2.5 rounded-full shrink-0"
+                style={{ backgroundColor: colorForIndex(index) }}
+              />
+              <span className="text-sm font-medium text-text truncate">
+                {bubble.label}
               </span>
             </div>
-          ))}
-        </div>
-      ) : (
-        <SelectedNameDetails name={selectedName} total={data.explore.all_name_count} />
-      )}
+            <span className="text-xs text-text-muted shrink-0">
+              {bubbleSummary(bubble)}
+            </span>
+          </div>
+        ))}
+      </div>
     </section>
-  );
-}
-
-function SelectedNameDetails({
-  name,
-  total,
-}: {
-  name: NamePoint | null;
-  total: number;
-}) {
-  if (!name) {
-    return (
-      <p className="mt-4 text-sm text-text-muted">
-        {total} projected names are available in the detailed map.
-      </p>
-    );
-  }
-
-  return (
-    <article className="mt-4 rounded-xl border border-border bg-bg-card p-4">
-      <h3 className="font-semibold text-text">{name.display_name}</h3>
-      <p className="text-sm text-text-secondary mt-1">{nameMeta(name)}</p>
-      <p className="text-xs text-text-muted mt-2">
-        Neighborhood: {name.cluster}
-      </p>
-    </article>
   );
 }

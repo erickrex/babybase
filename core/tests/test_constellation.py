@@ -133,8 +133,10 @@ class TestConstellationView:
         assert data["parents"]["current_user"]["liked_count"] == 2
         assert data["parents"]["partner"]["liked_count"] == 2
         assert data["explore"]["bubbles"]
-        assert len(data["names"]) == 4
-        assert data["matched_name_ids"] == [str(sofia.id)]
+        assert "featured_name_ids" not in data["explore"]
+        assert "names" not in data
+        assert "clusters" not in data
+        assert "matched_name_ids" not in data
 
     def test_solo_onboarded_user_gets_starter_map(self):
         user = User.objects.create_user(email="solo-map@test.com", password="testpass123")

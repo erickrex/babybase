@@ -106,7 +106,6 @@ def _build_couple_map(user: User, couple: Couple) -> dict[str, Any]:
 
     featured_names = _sorted_featured_names(featured)
     neighborhoods = _build_neighborhoods(featured_names)
-    legacy = build_legacy_constellation(couple)
     parent_summary = _build_parent_summaries(couple, user)
 
     return {
@@ -123,8 +122,7 @@ def _build_couple_map(user: User, couple: Couple) -> dict[str, Any]:
         "taste_neighborhoods": neighborhoods,
         "featured_names": featured_names,
         "parents": parent_summary,
-        "explore": _build_explore(neighborhoods, featured_names, legacy),
-        **legacy,
+        "explore": _build_explore(neighborhoods, featured_names),
     }
 
 
@@ -134,8 +132,6 @@ def _build_solo_map(user: User, solo_response: OnboardingResponse) -> dict[str, 
 
     featured_names = _sorted_featured_names(featured)
     neighborhoods = _build_neighborhoods(featured_names)
-    legacy = build_legacy_constellation(None)
-
     parent_summary = {
         "current_user": {
             "label": "You",
@@ -161,8 +157,7 @@ def _build_solo_map(user: User, solo_response: OnboardingResponse) -> dict[str, 
         "taste_neighborhoods": neighborhoods,
         "featured_names": featured_names,
         "parents": parent_summary,
-        "explore": _build_explore(neighborhoods, featured_names, legacy),
-        **legacy,
+        "explore": _build_explore(neighborhoods, featured_names),
     }
 
 
@@ -423,75 +418,9 @@ def _empty_parent_summary(label: str) -> dict[str, Any]:
     }
 
 
-def build_legacy_constellation(couple: Couple | None) -> dict[str, Any]:
-    """Return the legacy dot-map fields for secondary exploration."""
-    names_qs = (
-        Name.objects.filter(active=True, x_2d__isnull=False, y_2d__isnull=False)
-        .order_by("display_name")
-        .values(
-            "id",
-            "canonical_name",
-            "display_name",
-            "x_2d",
-            "y_2d",
-            "origin_backgrounds",
-            "gender_usage",
-            "age_style_category",
-        )
-    )
-
-    names_data = []
-    cluster_points: dict[str, list[tuple[float, float]]] = {}
-
-    for name in names_qs:
-        origins = name["origin_backgrounds"] or []
-        cluster_label = origins[0] if origins else "Other"
-        names_data.append(
-            {
-                "id": str(name["id"]),
-                "canonical_name": name["canonical_name"],
-                "display_name": name["display_name"],
-                "x": name["x_2d"],
-                "y": name["y_2d"],
-                "cluster": cluster_label,
-                "origin_backgrounds": origins,
-                "gender_usage": name["gender_usage"],
-                "age_style_category": name["age_style_category"],
-            }
-        )
-        cluster_points.setdefault(cluster_label, []).append((name["x_2d"], name["y_2d"]))
-
-    clusters = []
-    for label, points in cluster_points.items():
-        cx = sum(p[0] for p in points) / len(points)
-        cy = sum(p[1] for p in points) / len(points)
-        clusters.append(
-            {
-                "label": label,
-                "centroid_x": round(cx, 4),
-                "centroid_y": round(cy, 4),
-                "count": len(points),
-            }
-        )
-
-    matched_name_ids: list[str] = []
-    if couple:
-        matched_name_ids = [
-            str(name_id) for name_id in MutualMatch.objects.filter(couple=couple).values_list("name_id", flat=True)
-        ]
-
-    return {
-        "names": names_data,
-        "clusters": clusters,
-        "couple_centroids": _compute_couple_centroids(couple) if couple else {"parent_a": None, "parent_b": None},
-        "matched_name_ids": matched_name_ids,
-    }
-
-
 def _build_explore(
     neighborhoods: list[dict[str, Any]],
     featured_names: list[dict[str, Any]],
-    legacy: dict[str, Any],
 ) -> dict[str, Any]:
     bubbles = []
     for neighborhood in neighborhoods:
@@ -519,46 +448,7 @@ def _build_explore(
 
     return {
         "bubbles": bubbles,
-        "featured_name_ids": [name["id"] for name in featured_names],
-        "all_name_count": len(legacy["names"]),
     }
-
-
-def _compute_couple_centroids(couple: Couple) -> dict[str, Any]:
-    result = {"parent_a": None, "parent_b": None}
-
-    for key, user in [("parent_a", couple.user_a), ("parent_b", couple.user_b)]:
-        if user is None:
-            continue
-
-        positions = list(
-            Name.objects.filter(
-                swipes__couple=couple,
-                swipes__user=user,
-                swipes__action=SwipeAction.LIKE,
-                x_2d__isnull=False,
-                y_2d__isnull=False,
-            ).values_list("x_2d", "y_2d")
-        )
-        if not positions:
-            continue
-
-        centroid = _centroid_from_points(positions)
-        if centroid is None:
-            continue
-
-        max_dist = 0.0
-        for px, py in positions:
-            dist = ((px - centroid["centroid_x"]) ** 2 + (py - centroid["centroid_y"]) ** 2) ** 0.5
-            max_dist = max(max_dist, dist)
-
-        result[key] = {
-            **centroid,
-            "radius": round(max_dist, 4),
-            "liked_count": len(positions),
-        }
-
-    return result
 
 
 def _compute_centroid(names: list[Name]) -> dict[str, Any] | None:

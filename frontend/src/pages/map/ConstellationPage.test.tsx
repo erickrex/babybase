@@ -169,35 +169,7 @@ const coupleMapResponse = {
             shortlisted_count: 1,
           },
         ],
-        featured_name_ids: ['name-1', 'name-2', 'name-3', 'name-4'],
-        all_name_count: 4,
       },
-      names: [
-        {
-          id: 'name-1',
-          canonical_name: 'MapSofia',
-          display_name: 'Sofia',
-          x: 0.2,
-          y: 0.2,
-          cluster: 'Spanish',
-          origin_backgrounds: ['Spanish'],
-          gender_usage: ['girl'],
-          age_style_category: 'classic',
-        },
-        {
-          id: 'name-2',
-          canonical_name: 'MapAlma',
-          display_name: 'Alma',
-          x: 0.25,
-          y: 0.22,
-          cluster: 'Spanish',
-          origin_backgrounds: ['Spanish'],
-          gender_usage: ['girl'],
-          age_style_category: 'classic',
-        },
-      ],
-      clusters: [{ label: 'Spanish', centroid_x: 0.225, centroid_y: 0.21, count: 2 }],
-      matched_name_ids: ['name-1'],
     },
   },
 };
@@ -260,15 +232,15 @@ describe('ConstellationPage', () => {
     expect(mockedApi.get).toHaveBeenCalledWith('/constellation/');
   });
 
-  it('moves dense dots behind explore mode', async () => {
+  it('renders explore as neighborhood bubbles only', async () => {
     render(<ConstellationPage />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Explore' }));
-    expect(screen.getByRole('button', { name: 'Neighborhoods' })).toBeInTheDocument();
-    expect(screen.getByText('2 names')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Individual Names' }));
-    expect(screen.getByText('4 projected names are available in the detailed map.')).toBeInTheDocument();
+    expect(screen.getByText('Neighborhood Map')).toBeInTheDocument();
+    expect(screen.getByText(/strongest taste groups/)).toBeInTheDocument();
+    expect(screen.getByText('1 shortlisted · 2 names')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Individual Names' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/projected names/)).not.toBeInTheDocument();
   });
 
   it('renders solo maps without partner-only stats', async () => {
