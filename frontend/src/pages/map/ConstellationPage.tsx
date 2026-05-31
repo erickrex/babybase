@@ -1,5 +1,31 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import api from '../../services/api';
+import { colors } from '../../theme/tokens';
+
+type NameStatus =
+  | 'shortlisted'
+  | 'matched'
+  | 'liked_by_you'
+  | 'liked_by_partner'
+  | 'recommended'
+  | 'starter';
+
+interface FeaturedName {
+  id: string;
+  canonical_name: string;
+  display_name: string;
+  origin_backgrounds: string[];
+  gender_usage: string[];
+  length_category: string;
+  age_style_category: string;
+  historical_significance_score: number;
+  x: number | null;
+  y: number | null;
+  status: NameStatus;
+  reasons: string[];
+  score: number;
+  rank: number | null;
+}
 
 interface NamePoint {
   id: string;
@@ -20,227 +46,164 @@ interface Cluster {
   count: number;
 }
 
-interface ParentCentroid {
+interface TasteNeighborhood {
+  id: string;
+  label: string;
+  description: string;
+  count: number;
+  matched_count: number;
+  shortlisted_count: number;
+  traits: {
+    origins: string[];
+    styles: string[];
+    genders: string[];
+  };
+  representative_names: FeaturedName[];
+}
+
+interface ExploreBubble {
+  id: string;
+  label: string;
+  count: number;
   centroid_x: number;
   centroid_y: number;
-  radius: number;
+  matched_count: number;
+  shortlisted_count: number;
+}
+
+interface ParentSummary {
+  label: string;
   liked_count: number;
+  top_origins: string[];
+  top_styles: string[];
+  centroid: {
+    centroid_x: number;
+    centroid_y: number;
+    liked_count: number;
+  } | null;
+}
+
+interface MapSummary {
+  title: string;
+  body: string;
+  stats: {
+    matched_count: number;
+    shortlisted_count: number;
+    featured_count: number;
+    current_user_likes: number;
+    partner_likes: number;
+  };
 }
 
 interface ConstellationData {
+  mode: 'couple' | 'solo' | 'solo_couple';
+  summary: MapSummary;
+  taste_neighborhoods: TasteNeighborhood[];
+  featured_names: FeaturedName[];
+  parents: {
+    current_user: ParentSummary;
+    partner: ParentSummary | null;
+  };
+  explore: {
+    bubbles: ExploreBubble[];
+    featured_name_ids: string[];
+    all_name_count: number;
+  };
   names: NamePoint[];
   clusters: Cluster[];
-  couple_centroids: {
-    parent_a: ParentCentroid | null;
-    parent_b: ParentCentroid | null;
-  };
   matched_name_ids: string[];
 }
 
-// Cluster color palette
-const CLUSTER_COLORS: Record<string, string> = {
-  Spanish: '#f59e0b',
-  Latin: '#f59e0b',
-  Italian: '#fb923c',
-  Portuguese: '#fbbf24',
-  French: '#f97316',
-  Greek: '#a78bfa',
-  Russian: '#60a5fa',
-  Slavic: '#38bdf8',
-  Ukrainian: '#7dd3fc',
-  Polish: '#93c5fd',
-  Germanic: '#34d399',
-  German: '#34d399',
-  English: '#6ee7b7',
-  Scandinavian: '#2dd4bf',
-  Norse: '#5eead4',
-  Celtic: '#a3e635',
-  Irish: '#bef264',
-  Arabic: '#fb7185',
-  Persian: '#f472b6',
-  Turkish: '#e879f9',
-  Hebrew: '#c084fc',
-  Japanese: '#fda4af',
-  Chinese: '#fca5a5',
-  Hawaiian: '#fdba74',
-  African: '#86efac',
-};
-
-const DEFAULT_COLOR = '#a8a29e';
-
-function getClusterColor(cluster: string): string {
-  return CLUSTER_COLORS[cluster] || DEFAULT_COLOR;
+interface ApiError {
+  response?: {
+    data?: {
+      message?: unknown;
+    };
+  };
 }
 
-interface TooltipState {
-  visible: boolean;
-  name: NamePoint | null;
-  screenX: number;
-  screenY: number;
+const WIDTH = 450;
+const HEIGHT = 300;
+const PADDING = 28;
+
+const BUBBLE_COLORS = [
+  colors.primary,
+  colors.coral,
+  colors.success,
+  colors.info,
+  colors.primaryDark,
+  colors.coralDark,
+];
+
+const STATUS_LABELS: Record<NameStatus, string> = {
+  shortlisted: 'Shortlisted',
+  matched: 'Match',
+  liked_by_you: 'Your like',
+  liked_by_partner: 'Partner like',
+  recommended: 'Recommended',
+  starter: 'Starter',
+};
+
+function getErrorMessage(err: unknown): string {
+  const apiError = err as ApiError;
+  const message = apiError.response?.data?.message;
+  return typeof message === 'string' ? message : 'Failed to load name map';
+}
+
+function toSvgX(x: number): number {
+  return PADDING + x * (WIDTH - 2 * PADDING);
+}
+
+function toSvgY(y: number): number {
+  return PADDING + y * (HEIGHT - 2 * PADDING);
+}
+
+function colorForIndex(index: number): string {
+  return BUBBLE_COLORS[index % BUBBLE_COLORS.length];
+}
+
+function colorForLabel(label: string): string {
+  const hash = Array.from(label).reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return colorForIndex(hash);
+}
+
+function displayLabel(value: string): string {
+  return value.replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function nameMeta(name: FeaturedName | NamePoint): string {
+  const origins = name.origin_backgrounds.slice(0, 2).join(', ') || 'Global';
+  const gender = name.gender_usage.join('/') || 'any';
+  return `${origins} · ${displayLabel(name.age_style_category)} · ${gender}`;
 }
 
 export default function ConstellationPage() {
   const [data, setData] = useState<ConstellationData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tooltip, setTooltip] = useState<TooltipState>({
-    visible: false,
-    name: null,
-    screenX: 0,
-    screenY: 0,
-  });
-
-  // Transform state for zoom/pan
-  const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
-  const [isPanning, setIsPanning] = useState(false);
-  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
-  const [lastPinchDist, setLastPinchDist] = useState<number | null>(null);
-
-  const svgRef = useRef<SVGSVGElement>(null);
-
-  // SVG viewport dimensions
-  const WIDTH = 450;
-  const HEIGHT = 520;
-  const PADDING = 30;
+  const [view, setView] = useState<'insights' | 'explore'>('insights');
+  const [exploreMode, setExploreMode] = useState<'neighborhoods' | 'names'>('neighborhoods');
+  const [selectedName, setSelectedName] = useState<NamePoint | null>(null);
 
   useEffect(() => {
-    fetchConstellation();
+    void fetchConstellation();
   }, []);
 
   async function fetchConstellation() {
     try {
       setIsLoading(true);
+      setError(null);
       const res = await api.get('/constellation/');
       setData(res.data.data);
     } catch (err: unknown) {
-      const message =
-        typeof err === 'object' &&
-        err !== null &&
-        'response' in err &&
-        typeof err.response === 'object' &&
-        err.response !== null &&
-        'data' in err.response &&
-        typeof err.response.data === 'object' &&
-        err.response.data !== null &&
-        'message' in err.response.data &&
-        typeof err.response.data.message === 'string'
-          ? err.response.data.message
-          : 'Failed to load constellation';
-      setError(message);
+      setError(getErrorMessage(err));
     } finally {
       setIsLoading(false);
     }
   }
 
-  // Convert data coordinates [0,1] to SVG coordinates
-  const toSvgX = useCallback(
-    (x: number) => PADDING + x * (WIDTH - 2 * PADDING),
-    []
-  );
-  const toSvgY = useCallback(
-    (y: number) => PADDING + y * (HEIGHT - 2 * PADDING),
-    []
-  );
-
-  // Handle dot tap/click
-  function handleDotClick(name: NamePoint, event: React.MouseEvent | React.TouchEvent) {
-    event.stopPropagation();
-    const rect = svgRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    let clientX: number, clientY: number;
-    if ('touches' in event) {
-      clientX = event.touches[0]?.clientX || 0;
-      clientY = event.touches[0]?.clientY || 0;
-    } else {
-      clientX = event.clientX;
-      clientY = event.clientY;
-    }
-
-    setTooltip({
-      visible: true,
-      name,
-      screenX: clientX - rect.left,
-      screenY: clientY - rect.top - 50,
-    });
-  }
-
-  function dismissTooltip() {
-    setTooltip({ visible: false, name: null, screenX: 0, screenY: 0 });
-  }
-
-  // Zoom with wheel
-  function handleWheel(e: React.WheelEvent) {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setTransform((prev) => ({
-      ...prev,
-      scale: Math.max(0.5, Math.min(5, prev.scale * delta)),
-    }));
-  }
-
-  // Pan with mouse
-  function handleMouseDown(e: React.MouseEvent) {
-    if (e.button !== 0) return;
-    setIsPanning(true);
-    setPanStart({ x: e.clientX - transform.x, y: e.clientY - transform.y });
-  }
-
-  function handleMouseMove(e: React.MouseEvent) {
-    if (!isPanning) return;
-    setTransform((prev) => ({
-      ...prev,
-      x: e.clientX - panStart.x,
-      y: e.clientY - panStart.y,
-    }));
-  }
-
-  function handleMouseUp() {
-    setIsPanning(false);
-  }
-
-  // Touch pan/pinch
-  function handleTouchStart(e: React.TouchEvent) {
-    if (e.touches.length === 1) {
-      setIsPanning(true);
-      setPanStart({
-        x: e.touches[0].clientX - transform.x,
-        y: e.touches[0].clientY - transform.y,
-      });
-    } else if (e.touches.length === 2) {
-      const dist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      setLastPinchDist(dist);
-    }
-  }
-
-  function handleTouchMove(e: React.TouchEvent) {
-    if (e.touches.length === 1 && isPanning) {
-      setTransform((prev) => ({
-        ...prev,
-        x: e.touches[0].clientX - panStart.x,
-        y: e.touches[0].clientY - panStart.y,
-      }));
-    } else if (e.touches.length === 2 && lastPinchDist !== null) {
-      const dist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      const delta = dist / lastPinchDist;
-      setLastPinchDist(dist);
-      setTransform((prev) => ({
-        ...prev,
-        scale: Math.max(0.5, Math.min(5, prev.scale * delta)),
-      }));
-    }
-  }
-
-  function handleTouchEnd() {
-    setIsPanning(false);
-    setLastPinchDist(null);
-  }
+  const stats = data?.summary.stats;
+  const matchedSet = useMemo(() => new Set(data?.matched_name_ids ?? []), [data]);
 
   if (isLoading) {
     return (
@@ -257,7 +220,7 @@ export default function ConstellationPage() {
           <p className="text-red-600 text-sm">{error}</p>
           <button
             onClick={fetchConstellation}
-            className="mt-2 text-sm text-primary font-medium"
+            className="mt-3 px-3 py-1.5 rounded-lg text-sm bg-primary text-white font-medium"
           >
             Retry
           </button>
@@ -266,227 +229,414 @@ export default function ConstellationPage() {
     );
   }
 
-  if (!data || data.names.length === 0) {
+  if (!data || data.featured_names.length === 0) {
     return (
       <div className="px-4 pt-6 text-center">
+        <h1 className="text-xl font-bold text-text mb-2">Name Map</h1>
         <p className="text-text-muted text-sm">
-          No constellation data available yet. Names need projections computed.
+          Like a few names to build your map.
         </p>
       </div>
     );
   }
 
-  const matchedSet = new Set(data.matched_name_ids);
-
   return (
-    <div className="px-2 pt-4">
-      <h1 className="text-lg font-bold text-text mb-2 px-2">Name Constellation</h1>
-      <p className="text-xs text-text-muted mb-3 px-2">
-        Names clustered by style and origin. Tap a dot to explore.
-      </p>
+    <div className="px-4 pt-5 pb-6">
+      <div className="mb-4">
+        <h1 className="text-xl font-bold text-text">Name Map</h1>
+        <p className="text-sm text-text-secondary mt-1">
+          {data.summary.title}
+        </p>
+      </div>
 
-      {/* SVG Map */}
-      <div
-        className="relative bg-bg-card rounded-xl border border-border overflow-hidden shadow-card"
-        style={{ touchAction: 'none' }}
-      >
-        <svg
-          ref={svgRef}
-          width="100%"
-          viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-          className="block"
-          onWheel={handleWheel}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
-          onClick={dismissTooltip}
+      <div className="flex rounded-lg bg-bg-muted border border-border p-1 mb-4">
+        <button
+          type="button"
+          aria-pressed={view === 'insights'}
+          onClick={() => setView('insights')}
+          className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+            view === 'insights'
+              ? 'bg-bg-card text-text shadow-sm'
+              : 'text-text-secondary'
+          }`}
         >
-          <g
-            transform={`translate(${transform.x}, ${transform.y}) scale(${transform.scale})`}
-          >
-            {/* Parent influence regions */}
-            {data.couple_centroids.parent_a && (
-              <circle
-                cx={toSvgX(data.couple_centroids.parent_a.centroid_x)}
-                cy={toSvgY(data.couple_centroids.parent_a.centroid_y)}
-                r={Math.max(20, data.couple_centroids.parent_a.radius * (WIDTH - 2 * PADDING))}
-                fill="rgba(96, 165, 250, 0.08)"
-                stroke="rgba(96, 165, 250, 0.3)"
-                strokeWidth="1.5"
-                strokeDasharray="4 2"
-              />
-            )}
-            {data.couple_centroids.parent_b && (
-              <circle
-                cx={toSvgX(data.couple_centroids.parent_b.centroid_x)}
-                cy={toSvgY(data.couple_centroids.parent_b.centroid_y)}
-                r={Math.max(20, data.couple_centroids.parent_b.radius * (WIDTH - 2 * PADDING))}
-                fill="rgba(251, 113, 133, 0.08)"
-                stroke="rgba(251, 113, 133, 0.3)"
-                strokeWidth="1.5"
-                strokeDasharray="4 2"
-              />
-            )}
-
-            {/* Overlap zone highlight */}
-            {data.couple_centroids.parent_a && data.couple_centroids.parent_b && (
-              <OverlapHighlight
-                a={data.couple_centroids.parent_a}
-                b={data.couple_centroids.parent_b}
-                toSvgX={toSvgX}
-                toSvgY={toSvgY}
-                width={WIDTH}
-                padding={PADDING}
-              />
-            )}
-
-            {/* Name dots */}
-            {data.names.map((name) => {
-              const isMatched = matchedSet.has(name.id);
-              const color = getClusterColor(name.cluster);
-              const r = isMatched ? 6 : 4;
-
-              return (
-                <circle
-                  key={name.id}
-                  cx={toSvgX(name.x)}
-                  cy={toSvgY(name.y)}
-                  r={r}
-                  fill={isMatched ? '#fbbf24' : color}
-                  stroke={isMatched ? '#f59e0b' : 'rgba(255,255,255,0.6)'}
-                  strokeWidth={isMatched ? 2 : 0.5}
-                  opacity={isMatched ? 1 : 0.8}
-                  className="cursor-pointer"
-                  onClick={(e) => handleDotClick(name, e)}
-                  onTouchStart={(e) => {
-                    if (e.touches.length === 1) {
-                      e.stopPropagation();
-                      handleDotClick(name, e);
-                    }
-                  }}
-                />
-              );
-            })}
-
-            {/* Cluster labels */}
-            {data.clusters
-              .filter((c) => c.count >= 3)
-              .map((cluster) => (
-                <text
-                  key={cluster.label}
-                  x={toSvgX(cluster.centroid_x)}
-                  y={toSvgY(cluster.centroid_y) - 12}
-                  textAnchor="middle"
-                  fontSize="9"
-                  fill="#a8a29e"
-                  fontWeight="500"
-                  className="pointer-events-none select-none"
-                >
-                  {cluster.label}
-                </text>
-              ))}
-          </g>
-        </svg>
-
-        {/* Tooltip */}
-        {tooltip.visible && tooltip.name && (
-          <div
-            className="absolute bg-white rounded-lg shadow-elevated border border-border p-3 z-10 min-w-[160px]"
-            style={{
-              left: Math.min(tooltip.screenX, WIDTH - 180),
-              top: Math.max(tooltip.screenY, 10),
-            }}
-          >
-            <p className="font-semibold text-text text-sm">
-              {tooltip.name.display_name}
-            </p>
-            <p className="text-xs text-text-muted mt-0.5">
-              {tooltip.name.origin_backgrounds.join(', ')}
-            </p>
-            <p className="text-xs text-text-muted">
-              {tooltip.name.age_style_category} · {tooltip.name.gender_usage.join('/')}
-            </p>
-          </div>
-        )}
+          Insights
+        </button>
+        <button
+          type="button"
+          aria-pressed={view === 'explore'}
+          onClick={() => setView('explore')}
+          className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+            view === 'explore'
+              ? 'bg-bg-card text-text shadow-sm'
+              : 'text-text-secondary'
+          }`}
+        >
+          Explore
+        </button>
       </div>
 
-      {/* Legend */}
-      <div className="mt-3 px-2">
-        <div className="flex flex-wrap gap-2">
-          {data.clusters
-            .filter((c) => c.count >= 2)
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 8)
-            .map((cluster) => (
-              <div
-                key={cluster.label}
-                className="flex items-center gap-1 px-2 py-1 rounded-full bg-bg-muted border border-border text-xs text-text-secondary"
-              >
-                <span
-                  className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: getClusterColor(cluster.label) }}
-                />
-                {cluster.label} ({cluster.count})
-              </div>
-            ))}
-        </div>
-      </div>
-
-      {/* Matched names indicator */}
-      {data.matched_name_ids.length > 0 && (
-        <div className="mt-3 px-2 flex items-center gap-2 text-xs text-text-muted">
-          <span className="w-3 h-3 rounded-full bg-matchGold border border-primary" />
-          <span>{data.matched_name_ids.length} matched names highlighted</span>
-        </div>
+      {view === 'insights' ? (
+        <InsightsView data={data} stats={stats} />
+      ) : (
+        <ExploreView
+          data={data}
+          mode={exploreMode}
+          matchedSet={matchedSet}
+          selectedName={selectedName}
+          onModeChange={(nextMode) => {
+            setExploreMode(nextMode);
+            setSelectedName(null);
+          }}
+          onSelectName={setSelectedName}
+        />
       )}
     </div>
   );
 }
 
-/** Renders a subtle highlight where parent A and B regions overlap */
-function OverlapHighlight({
-  a,
-  b,
-  toSvgX,
-  toSvgY,
-  width,
-  padding,
+function InsightsView({
+  data,
+  stats,
 }: {
-  a: ParentCentroid;
-  b: ParentCentroid;
-  toSvgX: (x: number) => number;
-  toSvgY: (y: number) => number;
-  width: number;
-  padding: number;
+  data: ConstellationData;
+  stats: MapSummary['stats'] | undefined;
 }) {
-  // Midpoint between the two centroids
-  const mx = (a.centroid_x + b.centroid_x) / 2;
-  const my = (a.centroid_y + b.centroid_y) / 2;
-
-  // Distance between centroids
-  const dist = Math.hypot(a.centroid_x - b.centroid_x, a.centroid_y - b.centroid_y);
-  const rA = a.radius;
-  const rB = b.radius;
-
-  // Only show overlap if circles actually overlap
-  if (dist > rA + rB) return null;
-
-  // Overlap radius is approximate
-  const overlapR = Math.max(10, ((rA + rB - dist) / 2) * (width - 2 * padding));
+  const statItems = [
+    { label: 'Matches', value: stats?.matched_count ?? 0 },
+    { label: 'Shortlist', value: stats?.shortlisted_count ?? 0 },
+    { label: 'Your likes', value: stats?.current_user_likes ?? 0 },
+    ...(data.parents.partner
+      ? [{ label: 'Partner likes', value: stats?.partner_likes ?? 0 }]
+      : []),
+  ];
 
   return (
-    <circle
-      cx={toSvgX(mx)}
-      cy={toSvgY(my)}
-      r={overlapR}
-      fill="rgba(251, 191, 36, 0.12)"
-      stroke="rgba(251, 191, 36, 0.4)"
-      strokeWidth="1"
-      strokeDasharray="3 2"
-    />
+    <>
+      <section className="rounded-xl border border-primary/25 bg-primary-muted px-4 py-4 mb-5">
+        <p className="text-sm text-text-secondary leading-relaxed">
+          {data.summary.body}
+        </p>
+        <div className="grid grid-cols-2 gap-2 mt-4">
+          {statItems.map((item) => (
+            <div key={item.label} className="rounded-lg bg-bg-card/70 px-3 py-2">
+              <p className="text-lg font-bold text-text">{item.value}</p>
+              <p className="text-xs text-text-muted">{item.label}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <ParentSignals parents={data.parents} mode={data.mode} />
+
+      <section className="mb-5">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base font-semibold text-text">Taste Neighborhoods</h2>
+          <span className="text-xs text-text-muted">{data.taste_neighborhoods.length}</span>
+        </div>
+        <div className="space-y-3">
+          {data.taste_neighborhoods.map((neighborhood, index) => (
+            <NeighborhoodCard
+              key={neighborhood.id}
+              neighborhood={neighborhood}
+              color={colorForIndex(index)}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base font-semibold text-text">Names To Try Next</h2>
+          <span className="text-xs text-text-muted">{data.featured_names.length}</span>
+        </div>
+        <div className="space-y-2">
+          {data.featured_names.slice(0, 10).map((name) => (
+            <FeaturedNameRow key={name.id} name={name} />
+          ))}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function ParentSignals({
+  parents,
+  mode,
+}: {
+  parents: ConstellationData['parents'];
+  mode: ConstellationData['mode'];
+}) {
+  const summaries = [parents.current_user, parents.partner].filter(
+    (summary): summary is ParentSummary => summary !== null
+  );
+
+  return (
+    <section className="mb-5">
+      <h2 className="text-base font-semibold text-text mb-3">
+        {mode === 'couple' ? 'Parent Signals' : 'Your Signals'}
+      </h2>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {summaries.map((summary) => (
+          <div
+            key={summary.label}
+            className="rounded-xl border border-border bg-bg-card px-4 py-3"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-text text-sm">{summary.label}</h3>
+              <span className="text-xs text-text-muted">
+                {summary.liked_count} likes
+              </span>
+            </div>
+            <TraitList
+              values={[...summary.top_origins, ...summary.top_styles.map(displayLabel)]}
+              emptyLabel="No strong signal yet"
+            />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function NeighborhoodCard({
+  neighborhood,
+  color,
+}: {
+  neighborhood: TasteNeighborhood;
+  color: string;
+}) {
+  return (
+    <article className="rounded-xl border border-border bg-bg-card p-4 shadow-sm">
+      <div className="flex items-start gap-3">
+        <span
+          className="mt-1 h-3 w-3 rounded-full shrink-0"
+          style={{ backgroundColor: color }}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="font-semibold text-text">{neighborhood.label}</h3>
+            <span className="shrink-0 rounded-full bg-bg-muted px-2 py-0.5 text-xs text-text-secondary">
+              {neighborhood.count}
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-text-secondary leading-snug">
+            {neighborhood.description}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {neighborhood.representative_names.slice(0, 4).map((name) => (
+              <span
+                key={name.id}
+                className="rounded-full bg-primary-muted px-2 py-1 text-xs text-primary-dark"
+              >
+                {name.display_name}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function FeaturedNameRow({ name }: { name: FeaturedName }) {
+  return (
+    <article className="rounded-xl border border-border bg-bg-card px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="font-semibold text-text truncate">{name.display_name}</h3>
+          <p className="text-xs text-text-muted mt-0.5">{nameMeta(name)}</p>
+        </div>
+        <span className="shrink-0 rounded-full bg-bg-muted px-2 py-1 text-xs text-text-secondary">
+          {STATUS_LABELS[name.status]}
+        </span>
+      </div>
+      {name.reasons.length > 0 && (
+        <p className="mt-2 text-sm text-text-secondary leading-snug">
+          {name.reasons[0]}
+        </p>
+      )}
+    </article>
+  );
+}
+
+function TraitList({
+  values,
+  emptyLabel,
+}: {
+  values: string[];
+  emptyLabel: string;
+}) {
+  const visible = values.filter(Boolean).slice(0, 4);
+  if (visible.length === 0) {
+    return <p className="mt-2 text-xs text-text-muted">{emptyLabel}</p>;
+  }
+
+  return (
+    <div className="mt-3 flex flex-wrap gap-1.5">
+      {visible.map((value) => (
+        <span
+          key={value}
+          className="rounded-full bg-bg-muted px-2 py-1 text-xs text-text-secondary"
+        >
+          {value}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ExploreView({
+  data,
+  mode,
+  matchedSet,
+  selectedName,
+  onModeChange,
+  onSelectName,
+}: {
+  data: ConstellationData;
+  mode: 'neighborhoods' | 'names';
+  matchedSet: Set<string>;
+  selectedName: NamePoint | null;
+  onModeChange: (mode: 'neighborhoods' | 'names') => void;
+  onSelectName: (name: NamePoint) => void;
+}) {
+  const maxBubbleCount = Math.max(
+    1,
+    ...data.explore.bubbles.map((bubble) => bubble.count)
+  );
+
+  return (
+    <section>
+      <div className="flex rounded-lg bg-bg-muted border border-border p-1 mb-4">
+        <button
+          type="button"
+          aria-pressed={mode === 'neighborhoods'}
+          onClick={() => onModeChange('neighborhoods')}
+          className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+            mode === 'neighborhoods'
+              ? 'bg-bg-card text-text shadow-sm'
+              : 'text-text-secondary'
+          }`}
+        >
+          Neighborhoods
+        </button>
+        <button
+          type="button"
+          aria-pressed={mode === 'names'}
+          onClick={() => onModeChange('names')}
+          className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+            mode === 'names'
+              ? 'bg-bg-card text-text shadow-sm'
+              : 'text-text-secondary'
+          }`}
+        >
+          Individual Names
+        </button>
+      </div>
+
+      <div className="rounded-xl border border-border bg-bg-card overflow-hidden">
+        <svg width="100%" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="block">
+          <rect width={WIDTH} height={HEIGHT} fill={colors.bgCard} />
+          {mode === 'neighborhoods'
+            ? data.explore.bubbles.map((bubble, index) => {
+                const radius = 18 + (bubble.count / maxBubbleCount) * 18;
+                const fill = colorForIndex(index);
+                return (
+                  <g key={bubble.id}>
+                    <circle
+                      cx={toSvgX(bubble.centroid_x)}
+                      cy={toSvgY(bubble.centroid_y)}
+                      r={radius}
+                      fill={fill}
+                      opacity="0.22"
+                      stroke={fill}
+                      strokeWidth="2"
+                    />
+                    <text
+                      x={toSvgX(bubble.centroid_x)}
+                      y={toSvgY(bubble.centroid_y) + 4}
+                      textAnchor="middle"
+                      fontSize="12"
+                      fontWeight="700"
+                      fill={colors.text}
+                    >
+                      {bubble.count}
+                    </text>
+                  </g>
+                );
+              })
+            : data.names.map((name) => {
+                const isMatched = matchedSet.has(name.id);
+                return (
+                  <circle
+                    key={name.id}
+                    cx={toSvgX(name.x)}
+                    cy={toSvgY(name.y)}
+                    r={isMatched ? 5 : 3.5}
+                    fill={isMatched ? colors.matchGold : colorForLabel(name.cluster)}
+                    opacity={isMatched ? 1 : 0.72}
+                    stroke={colors.bgCard}
+                    strokeWidth="0.75"
+                    className="cursor-pointer"
+                    onClick={() => onSelectName(name)}
+                  />
+                );
+              })}
+        </svg>
+      </div>
+
+      {mode === 'neighborhoods' ? (
+        <div className="mt-4 space-y-2">
+          {data.explore.bubbles.map((bubble, index) => (
+            <div
+              key={bubble.id}
+              className="flex items-center justify-between rounded-xl border border-border bg-bg-card px-3 py-2"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className="h-2.5 w-2.5 rounded-full shrink-0"
+                  style={{ backgroundColor: colorForIndex(index) }}
+                />
+                <span className="text-sm font-medium text-text truncate">
+                  {bubble.label}
+                </span>
+              </div>
+              <span className="text-xs text-text-muted shrink-0">
+                {bubble.count} names
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <SelectedNameDetails name={selectedName} total={data.explore.all_name_count} />
+      )}
+    </section>
+  );
+}
+
+function SelectedNameDetails({
+  name,
+  total,
+}: {
+  name: NamePoint | null;
+  total: number;
+}) {
+  if (!name) {
+    return (
+      <p className="mt-4 text-sm text-text-muted">
+        {total} projected names are available in the detailed map.
+      </p>
+    );
+  }
+
+  return (
+    <article className="mt-4 rounded-xl border border-border bg-bg-card p-4">
+      <h3 className="font-semibold text-text">{name.display_name}</h3>
+      <p className="text-sm text-text-secondary mt-1">{nameMeta(name)}</p>
+      <p className="text-xs text-text-muted mt-2">
+        Neighborhood: {name.cluster}
+      </p>
+    </article>
   );
 }
