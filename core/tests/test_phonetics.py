@@ -3,7 +3,7 @@
 Covers ``build_phonetic_text`` (the rewritten Phonetic_Embedding_Builder):
 the text describes how a name *sounds*, built from the cached
 ``phonetic_profile`` when present, and falls back to a deterministic
-metadata text when the profile is empty.
+sound-shape text when the profile is empty.
 
 The function reads only ``Name`` attributes and performs no I/O, so these
 tests construct in-memory (unsaved) ``Name`` instances and require no DB.
@@ -200,7 +200,7 @@ def test_full_profile_builds_sound_describing_text():
 
 
 def test_empty_profile_uses_metadata_fallback():
-    """An empty profile falls back to the canonical/variants/length metadata text."""
+    """An empty profile falls back to sound-shape text without semantic variants."""
     name = _make_name(
         canonical_name="Sofia",
         variants=["Sofía", "Sofiya"],
@@ -210,7 +210,30 @@ def test_empty_profile_uses_metadata_fallback():
 
     text = build_phonetic_text(name)
 
-    assert text == "Sofia. Variants: Sofía, Sofiya. Length: medium."
+    assert text == (
+        "Sofia. Sound key: S100. Starts with: so. Ends with: fia. "
+        "Vowel pattern: oia. Consonant pattern: sf. 2 syllables. Length: medium."
+    )
+    assert "Sofía" not in text
+    assert "Sofiya" not in text
+
+
+def test_fallback_does_not_embed_variant_family_names():
+    """Fallback phonetic text must not pull semantic/etymological variants into sound search."""
+    name = _make_name(
+        canonical_name="Samuel",
+        variants=["Samuele", "Samuël", "Samuil", "Shemuel", "Sam"],
+        length_category="medium",
+        phonetic_profile={},
+    )
+
+    text = build_phonetic_text(name)
+
+    assert "Samuel" in text
+    assert "Shemuel" not in text
+    assert "Samuele" not in text
+    assert "Variants" not in text
+    assert "Sound key:" in text
 
 
 def test_partial_profile_skips_missing_fields():
@@ -255,7 +278,10 @@ def test_missing_canonical_name_still_non_empty():
 
     text = build_phonetic_text(name)
 
-    assert text == "name. Variants: name. Length: ."
+    assert text == (
+        "name. Sound key: N500. Starts with: na. Ends with: ame. "
+        "Vowel pattern: ae. Consonant pattern: nm. 1 syllable. Length: ."
+    )
     assert len(text) > 0
 
 

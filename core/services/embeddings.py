@@ -2,6 +2,7 @@
 
 import json
 import logging
+import unicodedata
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
@@ -63,9 +64,9 @@ def build_phonetic_text(name) -> str:
         "Aiden. Pronounced ˈeɪdən. Rhymes with -aden. 2 syllables. "
         "Stress: primary on first syllable. Sounds like: rhymes with Braden..."
 
-    With an empty profile it falls back to a deterministic text derived from the
-    name's available fields (``canonical_name`` + ``variants`` +
-    ``length_category``), preserving the previous behavior.
+    With an empty profile it falls back to a deterministic sound-shape text
+    derived only from the written name (no origins, meanings, or variants), so
+    the phonetic vector does not collapse back toward semantic family clusters.
 
     Pure and offline: reads only ``name`` attributes, never invokes Nova or any
     external service, never raises, and always returns a non-empty string.
@@ -137,19 +138,91 @@ def _build_phonetic_text_from_profile(name, profile: dict) -> str:
 def _build_phonetic_fallback_text(name) -> str:
     """Deterministic, offline fallback when no phonetic profile is cached.
 
-    Preserves the previous behavior:
-    "{canonical_name}. Variants: {variants}. Length: {length_category}."
-    while guaranteeing a non-empty string even when field data is missing.
+    Uses spelling-derived sound-shape features rather than variants/origins.
+    Variants often encode etymological families (for example Samuel/Shemuel),
+    which makes the fallback behave like semantic search instead of phonetic
+    search when Nova enrichment has not been run.
     """
     canonical_raw = getattr(name, "canonical_name", "") or ""
     base = canonical_raw if canonical_raw.strip() else "name"
 
-    variants_list = getattr(name, "variants", None) or []
-    variants = ", ".join(variants_list[:5]) if variants_list else base
-
+    normalized = _normalize_name_for_sound(base)
     length_category = _phonetic_clean(getattr(name, "length_category", ""))
+    syllables = _estimate_syllables(normalized)
 
-    return f"{base}. Variants: {variants}. Length: {length_category}."
+    return (
+        f"{base}. "
+        f"Sound key: {_soundex_key(normalized)}. "
+        f"Starts with: {_first_sound(normalized)}. "
+        f"Ends with: {_ending_sound(normalized)}. "
+        f"Vowel pattern: {_vowel_pattern(normalized)}. "
+        f"Consonant pattern: {_consonant_pattern(normalized)}. "
+        f"{syllables} {'syllable' if syllables == 1 else 'syllables'}. "
+        f"Length: {length_category}."
+    )
+
+
+def _normalize_name_for_sound(value: str) -> str:
+    """Return lowercase ASCII letters for deterministic spelling-derived features."""
+    folded = unicodedata.normalize("NFKD", value)
+    ascii_text = folded.encode("ascii", "ignore").decode("ascii")
+    letters = [char.lower() for char in ascii_text if char.isalpha()]
+    return "".join(letters) or "name"
+
+
+def _first_sound(value: str) -> str:
+    return value[:2] if len(value) >= 2 else value
+
+
+def _ending_sound(value: str) -> str:
+    if len(value) <= 3:
+        return value
+    return value[-3:]
+
+
+def _vowel_pattern(value: str) -> str:
+    vowels = [char for char in value if char in "aeiouy"]
+    return "".join(vowels) or "none"
+
+
+def _consonant_pattern(value: str) -> str:
+    consonants = [char for char in value if char not in "aeiouy"]
+    return "".join(consonants) or "none"
+
+
+def _estimate_syllables(value: str) -> int:
+    groups = 0
+    previous_was_vowel = False
+    for char in value:
+        is_vowel = char in "aeiouy"
+        if is_vowel and not previous_was_vowel:
+            groups += 1
+        previous_was_vowel = is_vowel
+
+    if value.endswith("e") and groups > 1 and not value.endswith(("le", "ue")):
+        groups -= 1
+    return max(groups, 1)
+
+
+def _soundex_key(value: str) -> str:
+    """Small Soundex-style key to group rough English pronunciation shapes."""
+    codes = {
+        **dict.fromkeys("bfpv", "1"),
+        **dict.fromkeys("cgjkqsxz", "2"),
+        **dict.fromkeys("dt", "3"),
+        "l": "4",
+        **dict.fromkeys("mn", "5"),
+        "r": "6",
+    }
+    first = value[0].upper()
+    encoded = []
+    previous = codes.get(value[0], "")
+    for char in value[1:]:
+        code = codes.get(char, "")
+        if code and code != previous:
+            encoded.append(code)
+        previous = code
+    return (first + "".join(encoded) + "000")[:4]
 
 
 def build_cross_cultural_text(name) -> str:
