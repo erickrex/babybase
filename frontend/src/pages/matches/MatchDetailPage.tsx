@@ -1,21 +1,25 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMatches } from '../../hooks/useMatches';
-import type { MatchDetail, SimilarName } from '../../hooks/useMatches';
+import type { MatchDetail, SimilarName, SoundsLikeName } from '../../hooks/useMatches';
 
 /**
- * Match detail page: name meaning, origin, semantic fit breakdown, "More Like This".
+ * Match detail page: name meaning, origin, semantic fit breakdown, "More Like This",
+ * and "Sounds Like".
  */
 export default function MatchDetailPage() {
   const { nameId } = useParams<{ nameId: string }>();
   const navigate = useNavigate();
-  const { getMatchDetail, getSimilarNames, addToShortlist } = useMatches();
+  const { getMatchDetail, getSimilarNames, getSoundsLikeNames, addToShortlist } = useMatches();
 
   const [detail, setDetail] = useState<MatchDetail | null>(null);
   const [similarNames, setSimilarNames] = useState<SimilarName[]>([]);
+  const [soundsLikeNames, setSoundsLikeNames] = useState<SoundsLikeName[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingSimilar, setIsLoadingSimilar] = useState(false);
+  const [isLoadingSoundsLike, setIsLoadingSoundsLike] = useState(false);
   const [showSimilar, setShowSimilar] = useState(false);
+  const [showSoundsLike, setShowSoundsLike] = useState(false);
   const [isShortlisted, setIsShortlisted] = useState(false);
   const [isUpdatingShortlist, setIsUpdatingShortlist] = useState(false);
 
@@ -60,6 +64,15 @@ export default function MatchDetailPage() {
     setIsLoadingSimilar(false);
   };
 
+  const handleSoundsLike = async () => {
+    if (!nameId) return;
+    setShowSoundsLike(true);
+    setIsLoadingSoundsLike(true);
+    const names = await getSoundsLikeNames(nameId);
+    setSoundsLikeNames(names);
+    setIsLoadingSoundsLike(false);
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -96,7 +109,10 @@ export default function MatchDetailPage() {
 
       {/* Name header */}
       <div className="text-center mb-6">
-        <h1 className="text-3xl font-bold text-text mb-2">{name.display_name}</h1>
+        <div className="flex items-center justify-center gap-2 mb-2">
+          <h1 className="text-3xl font-bold text-text">{name.display_name}</h1>
+          <PronunciationButton audioUrl={detail.audio_url} />
+        </div>
         <div className="flex flex-wrap justify-center gap-2">
           {name.origin_backgrounds.map((origin) => (
             <span
@@ -183,16 +199,25 @@ export default function MatchDetailPage() {
         </div>
       </div>
 
-      {/* More Like This */}
-      {!showSimilar ? (
+      {/* More Like This / Sounds Like actions */}
+      <div className="flex gap-3">
         <button
           onClick={handleMoreLikeThis}
-          className="w-full py-3 rounded-xl bg-primary text-white font-semibold hover:bg-primary-dark transition-colors"
+          className="flex-1 py-3 rounded-xl bg-primary text-white font-semibold hover:bg-primary-dark transition-colors"
         >
           More Like This
         </button>
-      ) : (
-        <div>
+        <button
+          onClick={handleSoundsLike}
+          className="flex-1 py-3 rounded-xl bg-bg-card text-primary-dark font-semibold border border-primary hover:bg-primary-muted transition-colors"
+        >
+          Sounds Like
+        </button>
+      </div>
+
+      {/* Similar Names results */}
+      {showSimilar && (
+        <div className="mt-6">
           <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wide mb-3">
             Similar Names
           </h2>
@@ -203,28 +228,94 @@ export default function MatchDetailPage() {
           ) : (
             <div className="space-y-2">
               {similarNames.map((n) => (
-                <div
-                  key={n.id}
-                  className="bg-bg-card rounded-lg border border-border p-3 flex items-center justify-between"
-                >
-                  <span className="font-medium text-text">{n.display_name}</span>
-                  <div className="flex gap-1">
-                    {n.origin_backgrounds.slice(0, 2).map((o) => (
-                      <span
-                        key={o}
-                        className="px-2 py-0.5 rounded-full bg-bg-muted text-text-secondary text-xs"
-                      >
-                        {o}
-                      </span>
-                    ))}
-                  </div>
-                </div>
+                <NameResultRow key={n.id} name={n} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Sounds Like results */}
+      {showSoundsLike && (
+        <div className="mt-6">
+          <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wide mb-3">
+            Sounds Like
+          </h2>
+          {isLoadingSoundsLike ? (
+            <p className="text-text-muted text-sm">Loading similar-sounding names...</p>
+          ) : soundsLikeNames.length === 0 ? (
+            <p className="text-text-muted text-sm">No similar-sounding names available yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {soundsLikeNames.map((n) => (
+                <NameResultRow key={n.id} name={n} audioUrl={n.audio_url} />
               ))}
             </div>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+/** Shared result row for Similar Names and Sounds Like lists: name + origin pills. */
+function NameResultRow({
+  name,
+  audioUrl = null,
+}: {
+  name: SimilarName;
+  audioUrl?: string | null;
+}) {
+  return (
+    <div className="bg-bg-card rounded-lg border border-border p-3 flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <span className="font-medium text-text">{name.display_name}</span>
+        <PronunciationButton audioUrl={audioUrl} />
+      </div>
+      <div className="flex gap-1">
+        {name.origin_backgrounds.slice(0, 2).map((o) => (
+          <span
+            key={o}
+            className="px-2 py-0.5 rounded-full bg-bg-muted text-text-secondary text-xs"
+          >
+            {o}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Accessible 🔊 play control for a name's pronunciation audio.
+ * Renders nothing when no audio is available; on playback failure it hides
+ * itself so the surrounding view is never broken (Req 7.4, 7.5, 11.5).
+ */
+function PronunciationButton({ audioUrl }: { audioUrl: string | null }) {
+  const [hasFailed, setHasFailed] = useState(false);
+
+  if (!audioUrl || hasFailed) {
+    return null;
+  }
+
+  const handlePlay = () => {
+    try {
+      const audio = new Audio(audioUrl);
+      void audio.play().catch(() => setHasFailed(true));
+    } catch {
+      setHasFailed(true);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handlePlay}
+      aria-label="Play pronunciation"
+      className="inline-flex items-center justify-center w-8 h-8 rounded-full text-primary-dark hover:bg-primary-muted transition-colors"
+    >
+      <span aria-hidden="true">🔊</span>
+    </button>
   );
 }
 

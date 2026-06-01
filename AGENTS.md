@@ -15,6 +15,7 @@ BabyBase is a mobile-first "Tinder for baby names" app. Parents swipe on names; 
 - Auth: DRF token auth.
 - Python package manager: `uv`.
 - Frontend package manager: `npm`.
+- AWS: use the locally configured AWS profile or environment credentials for the intended account. Always verify the active identity with `aws sts get-caller-identity` before running commands that touch AWS.
 
 ## Commands
 
@@ -121,6 +122,7 @@ Preserve these unless the user explicitly asks for a product change.
 
 ## Security And Configuration
 
+- Always verify the active AWS identity with `aws sts get-caller-identity` before running anything that touches AWS, including Bedrock, Polly, S3, or CDK. Use the profile or credentials explicitly chosen for the target account, and do not commit local profile names, access keys, tokens, or account-specific `.env` values.
 - Never commit secrets, tokens, credentials, or generated local `.env` files.
 - `SECRET_KEY` must fail fast in production when missing.
 - CORS must remain explicit in production.

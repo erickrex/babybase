@@ -862,3 +862,106 @@ class TestCrossCulturalMode:
 
         assert "Travels well" not in explanation
         assert "used across" in explanation
+
+
+class TestSoundsLikeDeckMode:
+    """Tests for the optional "Sounds Like" deck mode (phonetic_style vector)."""
+
+    def test_vector_name_for_mode_routes_sounds_like(self):
+        # Feature: phonetic-name-search, Property 8
+        """sounds_like maps to phonetic_style; cross_cultural and the rest are unchanged.
+
+        Property 8 (Vector-name routing): for any mode, ``_vector_name_for_mode``
+        returns "phonetic_style" iff mode == SOUNDS_LIKE, "cross_cultural" iff
+        CROSS_CULTURAL, else "semantic".
+        """
+        assert _vector_name_for_mode(DeckMode.SOUNDS_LIKE) == "phonetic_style"
+        assert _vector_name_for_mode(DeckMode.CROSS_CULTURAL) == "cross_cultural"
+        assert _vector_name_for_mode(DeckMode.BEST_MATCH) == "semantic"
+        assert _vector_name_for_mode(DeckMode.BRIDGE_NAMES) == "semantic"
+        assert _vector_name_for_mode(DeckMode.MORE_LIKE_THIS) == "semantic"
+        assert _vector_name_for_mode(DeckMode.WILDCARD) == "semantic"
+
+    @patch("core.services.recommendations.search_names")
+    @patch("core.services.qdrant_client._average_vectors")
+    @patch("core.services.onboarding._get_liked_phonetic_vectors")
+    def test_generate_deck_sounds_like_mutual_likes_averages_vectors(
+        self,
+        mock_liked,
+        mock_average,
+        mock_search,
+        couple_with_onboarding,
+        sample_names,
+    ):
+        """Mutual-likes path averages phonetic_style vectors and searches that named vector."""
+        couple, _, _ = couple_with_onboarding
+
+        mock_liked.return_value = [[0.1] * 1024, [0.2] * 1024]
+        mock_average.return_value = [0.15] * 1024
+        candidates = [_make_qdrant_candidate(n, 0.9 - i * 0.1) for i, n in enumerate(sample_names)]
+        mock_search.return_value = candidates
+
+        deck = generate_deck(couple, mode="sounds_like")
+
+        assert deck.mode == "sounds_like"
+        assert deck.items.count() > 0
+        # Mutual phonetic_style likes are fetched and averaged for the query embedding.
+        mock_liked.assert_called_once_with(couple, mutual_only=True)
+        mock_average.assert_called_once_with([[0.1] * 1024, [0.2] * 1024])
+        # Every Qdrant search uses the phonetic_style named vector.
+        assert mock_search.call_args_list
+        assert all(
+            call.kwargs.get("vector_name") == "phonetic_style"
+            for call in mock_search.call_args_list
+        )
+
+    @patch("core.services.recommendations.search_names")
+    @patch("core.services.embeddings.generate_embedding")
+    @patch("core.services.onboarding._get_liked_phonetic_vectors")
+    def test_generate_deck_sounds_like_fallback_embeds_profile_text(
+        self,
+        mock_liked,
+        mock_generate_embedding,
+        mock_search,
+        couple_with_onboarding,
+        sample_names,
+    ):
+        """With no mutual phonetic likes, the deck falls back to embedding profile text."""
+        couple, _, _ = couple_with_onboarding
+
+        mock_liked.return_value = []
+        mock_generate_embedding.return_value = [0.05] * 1024
+        candidates = [_make_qdrant_candidate(n, 0.85 - i * 0.1) for i, n in enumerate(sample_names)]
+        mock_search.return_value = candidates
+
+        deck = generate_deck(couple, mode="sounds_like")
+
+        assert deck.mode == "sounds_like"
+        assert deck.items.count() > 0
+        # Fallback embeds the couple profile text via generate_embedding.
+        mock_generate_embedding.assert_called_once()
+        # Search still targets the phonetic_style named vector.
+        assert mock_search.call_args_list
+        assert all(
+            call.kwargs.get("vector_name") == "phonetic_style"
+            for call in mock_search.call_args_list
+        )
+
+    def test_sounds_like_does_not_change_base_weights(self):
+        """SOUNDS_LIKE adds no rerank bonus — the base weighted score is returned unchanged (Req 9.6)."""
+        base = dict(
+            mode=DeckMode.SOUNDS_LIKE,
+            final=0.5,
+            semantic=0.6,
+            couple_overlap=0.4,
+            filter_fit=0.3,
+            bridge=0.2,
+            novelty=0.1,
+            diversity=0.1,
+        )
+
+        # No payload, empty payload, and a payload carrying an international_score
+        # must all leave the base final score untouched for sounds_like.
+        assert _apply_mode_score_adjustments(**base) == 0.5
+        assert _apply_mode_score_adjustments(**base, payload={}) == 0.5
+        assert _apply_mode_score_adjustments(**base, payload={"international_score": 0.8}) == 0.5

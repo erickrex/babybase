@@ -3,18 +3,24 @@ import SwipeDeck from '../../components/swipe/SwipeDeck';
 import MatchCelebration from '../../components/swipe/MatchCelebration';
 import { useDeck } from '../../hooks/useDeck';
 
-type DeckModeOption = 'best_match' | 'bridge_names' | 'wildcard' | 'cross_cultural';
+type DeckModeOption =
+  | 'best_match'
+  | 'bridge_names'
+  | 'wildcard'
+  | 'cross_cultural'
+  | 'sounds_like';
 
 const MODE_OPTIONS: { value: DeckModeOption; label: string; icon: string }[] = [
   { value: 'best_match', label: 'Best Match', icon: '✨' },
   { value: 'bridge_names', label: 'Bridge Names', icon: '🌉' },
   { value: 'cross_cultural', label: 'Travels', icon: '🌍' },
+  { value: 'sounds_like', label: 'Sounds Like', icon: '🔊' },
   { value: 'wildcard', label: 'Wildcards', icon: '🎲' },
 ];
 
 /**
  * Main deck page — integrates useDeck + SwipeDeck + MatchCelebration.
- * Includes mode toggle for Best Match / Bridge Names / Travels / Wildcards.
+ * Includes mode toggle for Best Match / Bridge Names / Travels / Sounds Like / Wildcards.
  */
 export default function DeckPage() {
   const [selectedMode, setSelectedMode] = useState<DeckModeOption>('best_match');
@@ -94,19 +100,19 @@ export default function DeckPage() {
 
       {/* Mode toggle */}
       <div className="w-full max-w-[420px] mb-4">
-        <div className="flex rounded-xl bg-bg-muted border border-border p-1 gap-1">
+        <div className="grid grid-cols-2 sm:grid-cols-5 rounded-xl bg-bg-muted border border-border p-1 gap-1">
           {MODE_OPTIONS.map((option) => (
             <button
               key={option.value}
               onClick={() => setSelectedMode(option.value)}
-              className={`flex-1 px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
+              className={`min-h-10 px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
                 selectedMode === option.value
                   ? 'bg-primary text-white shadow-sm'
                   : 'text-text-secondary hover:text-text'
               }`}
             >
-              <span className="mr-1">{option.icon}</span>
-              {option.label}
+              <span className="block sm:inline sm:mr-1" aria-hidden="true">{option.icon}</span>
+              <span>{option.label}</span>
             </button>
           ))}
         </div>
@@ -136,11 +142,24 @@ export default function DeckPage() {
           </p>
         </div>
       )}
+      {selectedMode === 'sounds_like' && (
+        <div className="w-full max-w-[420px] mb-3 px-3 py-2 rounded-lg bg-primary-muted border border-primary/20">
+          <p className="text-xs text-primary-dark text-center">
+            🔊 Names that sound like the ones you both liked
+          </p>
+        </div>
+      )}
       {selectedMode === 'wildcard' && (
         <div className="w-full max-w-[420px] mb-3 px-3 py-2 rounded-lg bg-coral-light border border-coral/20">
           <p className="text-xs text-coral-dark text-center">
             🎲 Surprising picks outside your usual taste
           </p>
+        </div>
+      )}
+
+      {error && cards.length > 0 && (
+        <div role="alert" className="w-full max-w-[420px] mb-3 px-3 py-2 rounded-lg bg-error/10 border border-error/20">
+          <p className="text-xs text-error text-center">{error}</p>
         </div>
       )}
 

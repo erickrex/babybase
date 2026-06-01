@@ -28,6 +28,7 @@ interface MatchDetail {
   matched_at: string;
   match_strength_score: number;
   status: string;
+  audio_url: string | null;
   semantic_breakdown: {
     style_pct: number;
     heritage_pct: number;
@@ -45,6 +46,10 @@ interface SimilarName {
   age_style_category: string;
 }
 
+interface SoundsLikeName extends SimilarName {
+  audio_url: string | null;
+}
+
 interface MatchDetailApiResponse {
   id: string;
   name: MatchName & {
@@ -55,6 +60,7 @@ interface MatchDetailApiResponse {
   matched_at: string;
   match_strength_score: number;
   status: string;
+  audio_url: string | null;
   semantic_fit_breakdown: {
     style: number;
     heritage: number;
@@ -71,6 +77,10 @@ interface SimilarNameApiResponse {
   age_style_category: string;
 }
 
+interface SoundsLikeNameApiResponse extends SimilarNameApiResponse {
+  audio_url: string | null;
+}
+
 function mapMatchDetail(data: MatchDetailApiResponse): MatchDetail {
   return {
     id: data.id,
@@ -78,6 +88,7 @@ function mapMatchDetail(data: MatchDetailApiResponse): MatchDetail {
     matched_at: data.matched_at,
     match_strength_score: data.match_strength_score,
     status: data.status,
+    audio_url: data.audio_url ?? null,
     semantic_breakdown: {
       style_pct: data.semantic_fit_breakdown.style,
       heritage_pct: data.semantic_fit_breakdown.heritage,
@@ -95,6 +106,13 @@ function mapSimilarName(data: SimilarNameApiResponse): SimilarName {
     origin_backgrounds: data.origin_backgrounds,
     length_category: data.length_category,
     age_style_category: data.age_style_category,
+  };
+}
+
+function mapSoundsLikeName(data: SoundsLikeNameApiResponse): SoundsLikeName {
+  return {
+    ...mapSimilarName(data),
+    audio_url: data.audio_url ?? null,
   };
 }
 
@@ -155,6 +173,16 @@ export function useMatches() {
     }
   }, []);
 
+  const getSoundsLikeNames = useCallback(async (nameId: string): Promise<SoundsLikeName[]> => {
+    try {
+      const res = await api.get(`/matches/${nameId}/sounds-like/`);
+      const names = (res.data.data || []) as SoundsLikeNameApiResponse[];
+      return names.map(mapSoundsLikeName);
+    } catch {
+      return [];
+    }
+  }, []);
+
   const addToShortlist = useCallback(async (nameId: string): Promise<boolean> => {
     try {
       await api.post('/shortlist/', { name_id: nameId });
@@ -171,8 +199,9 @@ export function useMatches() {
     loadMatches,
     getMatchDetail,
     getSimilarNames,
+    getSoundsLikeNames,
     addToShortlist,
   };
 }
 
-export type { Match, MatchDetail, SimilarName, MatchName };
+export type { Match, MatchDetail, SimilarName, SoundsLikeName, MatchName };

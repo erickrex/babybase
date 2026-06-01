@@ -254,6 +254,47 @@ class TestComputeTasteVectorEndToEnd:
         result = compute_taste_vector(user)
         assert result is None
 
+    @pytest.mark.django_db
+    @patch("core.services.onboarding._fetch_vectors_for_name_ids")
+    def test_maybe_swipes_count_toward_confidence_and_like_rate_denominator(self, mock_fetch):
+        """Maybe swipes are neutral signal, but still part of the user's swipe history."""
+        user = User.objects.create_user(email="tv_maybe@test.com", password="testpass123")
+        couple = Couple.objects.create(
+            user_a=user, status=CoupleStatus.ACTIVE, residence_country="US"
+        )
+
+        names = []
+        for i in range(4):
+            names.append(
+                Name.objects.create(
+                    canonical_name=f"MaybeSignal{i}",
+                    display_name=f"MaybeSignal{i}",
+                    gender_usage=["boy"],
+                    origin_backgrounds=["Spanish"],
+                    languages=["es"],
+                    scripts=["Latin"],
+                    variants=[],
+                    length_category="short",
+                    age_style_category="classic",
+                    historical_significance_score=0.5,
+                    semantic_summary="Test.",
+                    active=True,
+                )
+            )
+
+        Swipe.objects.create(couple=couple, user=user, name=names[0], action=SwipeAction.LIKE)
+        Swipe.objects.create(couple=couple, user=user, name=names[1], action=SwipeAction.LIKE)
+        Swipe.objects.create(couple=couple, user=user, name=names[2], action=SwipeAction.MAYBE)
+        Swipe.objects.create(couple=couple, user=user, name=names[3], action=SwipeAction.MAYBE)
+
+        mock_fetch.return_value = [[1.0, 0.0, 0.0]] * 2
+
+        result = compute_taste_vector(user)
+
+        assert result is not None
+        assert result.swipe_count == 4
+        assert result.like_rate == pytest.approx(0.5)
+
 
 # ---------------------------------------------------------------------------
 # Task 14.2: Unit tests for confidence scoring

@@ -61,9 +61,18 @@ docker run --rm -p 6333:6333 -p 6334:6334 \
 
 For Qdrant Cloud, set `QDRANT_URL` and `QDRANT_API_KEY` in `.env` instead.
 
-### 3. Configure AWS Bedrock access
+### 3. Configure AWS access
 
-The backend uses Bedrock Runtime with Titan Embed V2:
+Use whichever AWS credential flow is standard for your machine, such as a named AWS CLI profile, environment variables, or an application role. Verify the active account before running Django commands, indexing jobs, CDK commands, or anything else that touches AWS:
+
+```bash
+export AWS_PROFILE=your-profile
+export AWS_REGION=us-east-1
+
+aws sts get-caller-identity
+```
+
+The backend uses Bedrock Runtime with Titan Embed V2 for embeddings:
 
 ```text
 amazon.titan-embed-text-v2:0
@@ -71,24 +80,22 @@ amazon.titan-embed-text-v2:0
 
 The embedding model returns 1024-dimensional vectors. The app validates this dimension before indexing or querying Qdrant.
 
-Use whichever AWS credential flow is standard for your machine:
+The phonetic enrichment flow also uses Bedrock Nova, Amazon Polly, and S3:
 
-```bash
-# Example: named AWS profile
-export AWS_PROFILE=your-profile
-export AWS_REGION=us-east-1
-
-# Confirm the identity Django/boto3 will use
-aws sts get-caller-identity
+```text
+amazon.nova-lite-v1:0
 ```
 
-The active identity needs `bedrock:InvokeModel` for:
+The active AWS identity, or the deployed application role it provisions, needs:
 
 ```text
 arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0
+arn:aws:bedrock:*::foundation-model/amazon.nova-lite-v1:0
+polly:SynthesizeSpeech
+s3:PutObject and s3:GetObject on the pronunciation audio bucket's pronunciations/ prefix
 ```
 
-The `infra/` CDK project contains a minimal IAM role/policy for Bedrock invocation:
+The `infra/` CDK project contains IAM and S3 resources for Bedrock invocation and pronunciation audio:
 
 ```bash
 cd infra
@@ -224,6 +231,10 @@ uv run python manage.py shell -c "from core.models import NameVectorIndexRef; pr
 | `QDRANT_COLLECTION` | `names_global_v1` | Qdrant collection queried and indexed by the app |
 | `QDRANT_TIMEOUT_SECONDS` | `180` | Qdrant client timeout for search and indexing requests |
 | `AWS_BEDROCK_REGION` | `us-east-1` | AWS region for Bedrock Runtime API |
+| `NOVA_MODEL_ID` | `amazon.nova-lite-v1:0` | Bedrock Nova model used to generate cached phonetic profiles |
+| `PRONUNCIATION_AUDIO_BUCKET` | - | Private S3 bucket for Polly pronunciation audio |
+| `PRONUNCIATION_VOICE` | `Joanna` | Amazon Polly neural voice used for pronunciation audio |
+| `PRONUNCIATION_URL_TTL_SECONDS` | `3600` | TTL for presigned pronunciation audio URLs |
 | `LOG_LEVEL` | `INFO` | Logging level for `core` logger |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Allowed CORS origins |
 

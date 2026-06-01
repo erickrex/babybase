@@ -150,20 +150,26 @@ def get_similar_to_names(
     name_ids: list[str],
     filters: dict | None = None,
     limit: int = 10,
+    vector_name: str = "semantic",
 ) -> list[dict]:
     """
     Find names similar to a set of anchor names.
 
-    Fetches vectors for the given name IDs, averages them, and searches
-    for nearest neighbors.
+    Fetches the named vectors for the given name IDs, averages them, and
+    searches for nearest neighbors against the same named vector.
 
     Args:
         name_ids: List of Qdrant point ID strings to use as anchors.
         filters: Optional payload filters.
         limit: Max results to return.
+        vector_name: Which named vector to anchor on and search against
+            (e.g. "semantic" or "phonetic_style"). Defaults to "semantic",
+            preserving the existing "More Like This" caller.
 
     Returns:
-        List of result dicts (same format as search_names).
+        List of result dicts (same format as search_names). Returns an empty
+        list when no anchor IDs are given, no points are found, or none of the
+        anchor points have a stored vector under vector_name.
     """
     if not name_ids:
         return []
@@ -174,19 +180,20 @@ def get_similar_to_names(
     points = client.retrieve(
         collection_name=settings.QDRANT_COLLECTION,
         ids=[str(nid) for nid in name_ids],
-        with_vectors=["semantic"],
+        with_vectors=[vector_name],
     )
 
     if not points:
         return []
 
-    # Average the semantic vectors
+    # Average the stored named vectors
     vectors = []
     for point in points:
-        if point.vector and "semantic" in point.vector:
-            vectors.append(point.vector["semantic"])
+        if point.vector and vector_name in point.vector:
+            vectors.append(point.vector[vector_name])
 
     if not vectors:
+        # Req 8.7 / 11.4: missing stored vector → empty result, no crash
         return []
 
     avg_vector = _average_vectors(vectors)
@@ -197,7 +204,7 @@ def get_similar_to_names(
         filters=filters,
         limit=limit,
         exclude_ids=name_ids,
-        vector_name="semantic",
+        vector_name=vector_name,
     )
 
 

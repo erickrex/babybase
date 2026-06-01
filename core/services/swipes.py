@@ -7,6 +7,7 @@ import logging
 
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 from core.models import (
     Couple,
@@ -248,6 +249,60 @@ def get_similar_names(name_id: str, couple: Couple) -> list[dict]:
     )
 
     # Filter out already-swiped names from results
+    swiped_set = set(swiped_point_ids)
+    filtered_results = [r for r in results if r.get("point_id") not in swiped_set]
+
+    return filtered_results[:10]
+
+
+def get_sounds_like_names(name_id: str, couple: Couple) -> list[dict]:
+    """
+    Find names that sound similar to a given name, excluding already-swiped names.
+
+    Anchors on the name's stored ``phonetic_style`` vector in Qdrant (no
+    query-time embedding) and searches for nearest neighbors in sound space.
+
+    Args:
+        name_id: UUID of the anchor name.
+        couple: The couple (used to exclude already-swiped names).
+
+    Returns:
+        List of similar-sounding name dicts from Qdrant (top 10). Returns an
+        empty list when the anchor has no stored vector or when Qdrant is
+        unavailable.
+    """
+    from core.models import NameVectorIndexRef
+
+    # Get the Qdrant point ID for this name. A missing ref means the anchor has
+    # no stored vector → empty result (Req 11.4).
+    try:
+        vector_ref = NameVectorIndexRef.objects.get(name_id=name_id)
+    except NameVectorIndexRef.DoesNotExist:
+        return []
+
+    # Get already-swiped name IDs for exclusion
+    swiped_name_ids = list(
+        Swipe.objects.filter(couple=couple)
+        .values_list("name__vector_ref__qdrant_point_id", flat=True)
+        .distinct()
+    )
+    swiped_point_ids = [str(pid) for pid in swiped_name_ids if pid]
+
+    # Search for similar-sounding names via the phonetic_style named vector.
+    # Wrap the Qdrant call so any outage yields an empty result (Req 11.3).
+    try:
+        results = get_similar_to_names(
+            name_ids=[str(vector_ref.qdrant_point_id)],
+            filters={"active": True},
+            limit=10 + len(swiped_point_ids),  # Request extra to account for post-filtering
+            vector_name="phonetic_style",
+        )
+    except (UnexpectedResponse, ConnectionError, TimeoutError) as exc:
+        logger.error("Sounds-like search failed for name %s: %s", name_id, exc)
+        return []
+
+    # Filter out already-swiped names from results (the anchor is already
+    # excluded by get_similar_to_names via exclude_ids).
     swiped_set = set(swiped_point_ids)
     filtered_results = [r for r in results if r.get("point_id") not in swiped_set]
 

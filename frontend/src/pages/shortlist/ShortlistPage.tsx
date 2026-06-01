@@ -18,6 +18,36 @@ interface ShortlistItem {
   removal_requested_by: string | null;
 }
 
+interface ApiError {
+  response?: {
+    status?: number;
+    data?: {
+      message?: string;
+    };
+  };
+  request?: unknown;
+}
+
+function getShortlistErrorMessage(error: unknown, fallback: string): string {
+  const apiError = error as ApiError;
+  const status = apiError.response?.status;
+  const message = apiError.response?.data?.message;
+
+  if (status === 400) {
+    return message || fallback;
+  }
+  if (status === 401) {
+    return 'Your session expired. Please sign in again.';
+  }
+  if (status === 429) {
+    return 'Too many shortlist updates. Wait a moment and try again.';
+  }
+  if (apiError.request && !apiError.response) {
+    return 'Network error. Check your connection and try again.';
+  }
+  return message || fallback;
+}
+
 /**
  * Shortlist page: ordered list of shortlisted names with reorder and compare.
  * Removing a name requires the partner's approval — one partner requests
@@ -29,14 +59,16 @@ export default function ShortlistPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [compareMode, setCompareMode] = useState(false);
   const [selectedForCompare, setSelectedForCompare] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const loadShortlist = useCallback(async () => {
     setIsLoading(true);
+    setError(null);
     try {
       const res = await api.get('/shortlist/');
       setItems(res.data.data || []);
-    } catch {
-      // Silently handle
+    } catch (err) {
+      setError(getShortlistErrorMessage(err, 'Failed to load shortlist. Please try again.'));
     } finally {
       setIsLoading(false);
     }
@@ -44,6 +76,7 @@ export default function ShortlistPage() {
 
   // Request removal (or approve the partner's request if one is already pending).
   const handleRequestOrApprove = useCallback(async (nameId: string) => {
+    setError(null);
     try {
       const res = await api.delete('/shortlist/', { data: { name_id: nameId } });
       const data = res.data.data;
@@ -60,13 +93,14 @@ export default function ShortlistPage() {
           )
         );
       }
-    } catch {
-      // Silently handle
+    } catch (err) {
+      setError(getShortlistErrorMessage(err, 'Failed to update shortlist. Please try again.'));
     }
   }, []);
 
   // Resolve a pending request without removing: "cancel" (by requester) or "reject" (by partner).
   const handleResolveRequest = useCallback(async (nameId: string, decision: 'cancel' | 'reject') => {
+    setError(null);
     try {
       const res = await api.delete('/shortlist/', { data: { name_id: nameId, decision } });
       const data = res.data.data;
@@ -77,8 +111,8 @@ export default function ShortlistPage() {
             : item
         )
       );
-    } catch {
-      // Silently handle
+    } catch (err) {
+      setError(getShortlistErrorMessage(err, 'Failed to update shortlist. Please try again.'));
     }
   }, []);
 
@@ -114,9 +148,17 @@ export default function ShortlistPage() {
       <div className="flex flex-col items-center justify-center min-h-[60vh] px-4 text-center">
         <span className="text-5xl mb-4">⭐</span>
         <h2 className="text-xl font-bold text-text mb-2">No finalists yet</h2>
-        <p className="text-text-secondary text-sm">
-          Shortlist your favorite matches to compare them here.
+        <p className="text-text-secondary text-sm mb-4">
+          {error || 'Shortlist your favorite matches to compare them here.'}
         </p>
+        {error && (
+          <button
+            onClick={loadShortlist}
+            className="px-5 py-2 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary-dark transition-colors"
+          >
+            Try Again
+          </button>
+        )}
       </div>
     );
   }
@@ -139,6 +181,12 @@ export default function ShortlistPage() {
           {compareMode ? 'Done' : 'Compare'}
         </button>
       </div>
+
+      {error && (
+        <div role="alert" className="mb-4 rounded-xl bg-error/10 border border-error/20 p-3 text-sm text-error">
+          {error}
+        </div>
+      )}
 
       {compareMode && (
         <p className="text-xs text-text-muted mb-4">

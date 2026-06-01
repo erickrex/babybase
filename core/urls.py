@@ -13,6 +13,7 @@ from core.views.swipes import (
     matches_list_view,
     shortlist_view,
     similar_names_view,
+    sounds_like_view,
     swipe_view,
 )
 
@@ -37,6 +38,7 @@ urlpatterns = [
     path("matches/", matches_list_view, name="matches-list"),
     path("matches/<str:name_id>/", match_detail_view, name="matches-detail"),
     path("matches/<str:name_id>/similar/", similar_names_view, name="matches-similar"),
+    path("matches/<str:name_id>/sounds-like/", sounds_like_view, name="matches-sounds-like"),
     # Shortlist
     path("shortlist/", shortlist_view, name="shortlist"),
     # Constellation

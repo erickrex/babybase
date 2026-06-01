@@ -2,7 +2,8 @@
 
 from rest_framework import serializers
 
-from core.models import SwipeAction
+from core.models import Name, SwipeAction
+from core.services.pronunciation import presign_audio_url
 
 
 class SwipeSerializer(serializers.Serializer):
@@ -66,6 +67,19 @@ class MatchDetailSerializer(serializers.Serializer):
     match_strength_score = serializers.FloatField()
     status = serializers.CharField()
     semantic_fit_breakdown = serializers.DictField()
+    audio_url = serializers.SerializerMethodField()
+
+    def get_audio_url(self, obj) -> str | None:
+        """Return the presigned pronunciation URL for the anchor name, or None.
+
+        Resolves from the match's underlying ``Name`` instance. Returns ``None``
+        (not an error) when the name has no stored pronunciation audio, keeping
+        the response within the success envelope (Req 7.1, 7.2, 7.3).
+        """
+        name = getattr(obj, "name", None)
+        if name is None:
+            return None
+        return presign_audio_url(name)
 
 
 class ShortlistSerializer(serializers.Serializer):
@@ -111,3 +125,34 @@ class SimilarNameSerializer(serializers.Serializer):
 
     def get_age_style_category(self, obj) -> str:
         return obj.get("payload", {}).get("age_style_category", "")
+
+
+class SoundsLikeNameSerializer(SimilarNameSerializer):
+    """Serializer for "Sounds Like" results from the phonetic_style vector.
+
+    Inherits all fields from SimilarNameSerializer (name_id, canonical_name,
+    score, origin_backgrounds, gender_usage, length_category,
+    age_style_category) and adds the pronunciation ``audio_url``.
+
+    Serialized objects are result dicts from Qdrant (keys like ``name_id`` and
+    ``payload``), so resolving audio requires loading the ``Name`` by its
+    ``name_id`` and presigning the stored reference.
+    """
+
+    audio_url = serializers.SerializerMethodField()
+
+    def get_audio_url(self, obj) -> str | None:
+        """Return the presigned pronunciation URL for the result name, or None.
+
+        Loads the ``Name`` by the result's ``name_id`` and presigns its stored
+        audio reference. Returns ``None`` (not an error) when the id is missing,
+        the name no longer exists, or it has no stored audio, keeping the
+        response within the success envelope (Req 7.1, 7.2, 7.3, 10.3).
+        """
+        name_id = obj.get("name_id")
+        if not name_id:
+            return None
+        name = Name.objects.filter(id=name_id).only("id", "pronunciation_audio").first()
+        if name is None:
+            return None
+        return presign_audio_url(name)

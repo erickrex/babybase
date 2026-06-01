@@ -105,4 +105,21 @@ describe('DeckPage cross-cultural mode', () => {
       await screen.findByText(/Names that travel across languages and cultures/)
     ).toBeInTheDocument();
   });
+
+  it('calls the deck API with mode "sounds_like" and renders its badge', async () => {
+    render(<DeckPage />);
+
+    const soundsLikeButton = await screen.findByRole('button', { name: /Sounds Like/ });
+    fireEvent.click(soundsLikeButton);
+
+    await waitFor(() => {
+      expect(mockedApi.post).toHaveBeenCalledWith(
+        '/recommendations/deck/',
+        expect.objectContaining({ mode: 'sounds_like' })
+      );
+    });
+    expect(
+      await screen.findByText(/Names that sound like the ones you both liked/)
+    ).toBeInTheDocument();
+  });
 });

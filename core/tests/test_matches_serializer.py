@@ -358,7 +358,10 @@ class TestMatchDetailEndpointSchema:
         detail = data["data"]
 
         # Verify MatchDetailSerializer fields
-        expected_fields = {"id", "name", "matched_at", "match_strength_score", "status", "semantic_fit_breakdown"}
+        expected_fields = {
+            "id", "name", "matched_at", "match_strength_score", "status",
+            "semantic_fit_breakdown", "audio_url",
+        }
         assert set(detail.keys()) == expected_fields
 
         # Verify nested name fields

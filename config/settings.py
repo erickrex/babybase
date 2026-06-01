@@ -158,6 +158,16 @@ QDRANT_TIMEOUT_SECONDS = config("QDRANT_TIMEOUT_SECONDS", default=180, cast=int)
 # AWS Bedrock Configuration
 AWS_BEDROCK_REGION = config("AWS_BEDROCK_REGION", default="us-east-1")
 
+# Phonetic "Sounds Like" Configuration
+# Amazon Bedrock Nova model used to generate cached phonetic profiles
+NOVA_MODEL_ID = config("NOVA_MODEL_ID", default="amazon.nova-lite-v1:0")
+# S3 bucket for storing Amazon Polly pronunciation audio
+PRONUNCIATION_AUDIO_BUCKET = config("PRONUNCIATION_AUDIO_BUCKET", default="")
+# Amazon Polly neural voice used to synthesize pronunciation audio
+PRONUNCIATION_VOICE = config("PRONUNCIATION_VOICE", default="Joanna")
+# Time-to-live (seconds) for presigned pronunciation audio URLs
+PRONUNCIATION_URL_TTL_SECONDS = config("PRONUNCIATION_URL_TTL_SECONDS", default=3600, cast=int)
+
 # Logging Configuration
 LOG_LEVEL = config("LOG_LEVEL", default="INFO")
 

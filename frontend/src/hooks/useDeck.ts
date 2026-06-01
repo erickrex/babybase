@@ -28,6 +28,40 @@ interface TasteDrift {
   converging_traits: string[];
 }
 
+interface ApiError {
+  response?: {
+    status?: number;
+    data?: {
+      message?: string;
+    };
+  };
+  request?: unknown;
+}
+
+function getApiMessage(error: unknown, fallback: string): string {
+  const apiError = error as ApiError;
+  return apiError.response?.data?.message || fallback;
+}
+
+function getSwipeErrorMessage(error: unknown): string {
+  const apiError = error as ApiError;
+  const status = apiError.response?.status;
+
+  if (status === 400) {
+    return getApiMessage(error, 'That swipe could not be saved. Refresh your deck and try again.');
+  }
+  if (status === 401) {
+    return 'Your session expired. Please sign in again.';
+  }
+  if (status === 429) {
+    return 'You are swiping too quickly. Wait a moment and try again.';
+  }
+  if (apiError.request && !apiError.response) {
+    return 'Network error. Check your connection and try again.';
+  }
+  return getApiMessage(error, 'Failed to save swipe. Please try again.');
+}
+
 /**
  * Maps a raw API deck item to the NameCardData shape used by the frontend.
  */
@@ -76,8 +110,7 @@ export function useDeck(mode: string = 'best_match') {
         tasteDrift: tasteDrift || null,
       });
     } catch (err: unknown) {
-      const apiError = err as { response?: { data?: { message?: string } } };
-      const message = apiError?.response?.data?.message || 'Failed to load deck';
+      const message = getApiMessage(err, 'Failed to load deck');
       setState((prev) => ({
         ...prev,
         deckId: null,
@@ -108,13 +141,16 @@ export function useDeck(mode: string = 'best_match') {
   // Swipe action — optimistic update
   const swipe = useCallback(
     async (nameId: string, action: 'like' | 'dislike' | 'maybe'): Promise<SwipeResult> => {
+      let previousIndex = 0;
       // Optimistic: advance card immediately
       setState((prev) => {
+        previousIndex = prev.currentIndex;
         const nextIndex = prev.currentIndex + 1;
         return {
           ...prev,
           currentIndex: nextIndex,
           isExhausted: nextIndex >= prev.cards.length,
+          error: null,
         };
       });
 
@@ -124,8 +160,14 @@ export function useDeck(mode: string = 'best_match') {
           return { isMatch: true, matchData: res.data.data.match };
         }
         return { isMatch: false };
-      } catch {
-        // Don't revert on error — card is gone, retry on next session
+      } catch (err) {
+        const message = getSwipeErrorMessage(err);
+        setState((prev) => ({
+          ...prev,
+          currentIndex: Math.min(previousIndex, Math.max(prev.cards.length - 1, 0)),
+          isExhausted: false,
+          error: message,
+        }));
         return { isMatch: false };
       }
     },

@@ -187,6 +187,20 @@ def _get_liked_cross_cultural_vectors(
     )
 
 
+def _get_liked_phonetic_vectors(
+    couple: Couple, mutual_only: bool = False
+) -> list[list[float]]:
+    """Fetch ``phonetic_style`` vectors for names liked by the couple.
+
+    Thin wrapper over :func:`_get_liked_vectors_for_couple` that selects the
+    ``phonetic_style`` named vector. If mutual_only=True, only returns vectors
+    for names liked by BOTH parents.
+    """
+    return _get_liked_vectors_for_couple(
+        couple, mutual_only=mutual_only, vector_name="phonetic_style"
+    )
+
+
 def _get_liked_vectors_for_user(couple: Couple, user) -> list[list[float]]:
     """Fetch semantic vectors for names liked by a specific user in this couple."""
     if not user:

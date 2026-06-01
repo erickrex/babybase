@@ -125,4 +125,36 @@ describe('useDeck', () => {
     const swipeCall = mockedApi.post.mock.calls.find(([url]) => url === '/swipes/');
     expect(swipeCall?.[1]).toEqual({ name_id: 'name-1', action: 'like', deck_id: 'deck-1' });
   });
+
+  it('restores the current card and surfaces a message when a swipe fails', async () => {
+    mockedApi.post.mockImplementation(async (url: string) => {
+      if (url === '/recommendations/deck/') {
+        return deckResponse;
+      }
+
+      if (url === '/swipes/') {
+        throw {
+          response: {
+            status: 429,
+          },
+        };
+      }
+
+      throw new Error(`Unexpected URL ${url}`);
+    });
+
+    const { result } = renderHook(() => useDeck('best_match'));
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.swipe('name-1', 'like');
+    });
+
+    expect(result.current.currentIndex).toBe(0);
+    expect(result.current.isExhausted).toBe(false);
+    expect(result.current.error).toBe('You are swiping too quickly. Wait a moment and try again.');
+  });
 });

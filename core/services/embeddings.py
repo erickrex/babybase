@@ -53,10 +53,103 @@ def build_phonetic_text(name) -> str:
     """
     Build text input for the `phonetic_style` named vector.
 
-    Template: "{canonical_name}. Variants: {variants}. Length: {length_category}."
+    The text describes how the name *sounds* so Titan clusters names by sound
+    rather than by metadata.
+
+    With a non-empty ``phonetic_profile`` the text is built from the cached
+    profile fields (``ipa``, ``rhyme``, ``syllables``, ``stress``,
+    ``sounds_like``), e.g.::
+
+        "Aiden. Pronounced ˈeɪdən. Rhymes with -aden. 2 syllables. "
+        "Stress: primary on first syllable. Sounds like: rhymes with Braden..."
+
+    With an empty profile it falls back to a deterministic text derived from the
+    name's available fields (``canonical_name`` + ``variants`` +
+    ``length_category``), preserving the previous behavior.
+
+    Pure and offline: reads only ``name`` attributes, never invokes Nova or any
+    external service, never raises, and always returns a non-empty string.
     """
-    variants = ", ".join(name.variants[:5]) if name.variants else name.canonical_name
-    return f"{name.canonical_name}. Variants: {variants}. Length: {name.length_category}."
+    profile = getattr(name, "phonetic_profile", None)
+    if isinstance(profile, dict) and profile:
+        text = _build_phonetic_text_from_profile(name, profile)
+        if text:
+            return text
+    return _build_phonetic_fallback_text(name)
+
+
+def _phonetic_clean(value) -> str:
+    """Coerce an arbitrary profile value to a trimmed string (``None`` -> "")."""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _format_syllables(value) -> str:
+    """Render the syllable count as a phrase, or "" when not a positive int."""
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return ""
+    if count <= 0:
+        return ""
+    unit = "syllable" if count == 1 else "syllables"
+    return f"{count} {unit}."
+
+
+def _build_phonetic_text_from_profile(name, profile: dict) -> str:
+    """Build sound-describing text from a cached phonetic profile.
+
+    Tolerates missing or malformed fields by skipping them; partial profiles
+    still produce useful text.
+    """
+    parts: list[str] = []
+
+    # Embed the canonical name verbatim (matching the semantic/cross-cultural
+    # builders) so the name always appears unaltered in the embedding text.
+    canonical_raw = getattr(name, "canonical_name", "") or ""
+    if canonical_raw.strip():
+        parts.append(f"{canonical_raw}.")
+
+    ipa = _phonetic_clean(profile.get("ipa"))
+    if ipa:
+        parts.append(f"Pronounced {ipa}.")
+
+    rhyme = _phonetic_clean(profile.get("rhyme"))
+    if rhyme:
+        parts.append(f"Rhymes with {rhyme}.")
+
+    syllable_text = _format_syllables(profile.get("syllables"))
+    if syllable_text:
+        parts.append(syllable_text)
+
+    stress = _phonetic_clean(profile.get("stress"))
+    if stress:
+        parts.append(f"Stress: {stress}.")
+
+    sounds_like = _phonetic_clean(profile.get("sounds_like"))
+    if sounds_like:
+        parts.append(f"Sounds like: {sounds_like}.")
+
+    return " ".join(parts).strip()
+
+
+def _build_phonetic_fallback_text(name) -> str:
+    """Deterministic, offline fallback when no phonetic profile is cached.
+
+    Preserves the previous behavior:
+    "{canonical_name}. Variants: {variants}. Length: {length_category}."
+    while guaranteeing a non-empty string even when field data is missing.
+    """
+    canonical_raw = getattr(name, "canonical_name", "") or ""
+    base = canonical_raw if canonical_raw.strip() else "name"
+
+    variants_list = getattr(name, "variants", None) or []
+    variants = ", ".join(variants_list[:5]) if variants_list else base
+
+    length_category = _phonetic_clean(getattr(name, "length_category", ""))
+
+    return f"{base}. Variants: {variants}. Length: {length_category}."
 
 
 def build_cross_cultural_text(name) -> str:

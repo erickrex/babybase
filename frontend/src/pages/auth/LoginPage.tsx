@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCouple } from '../../contexts/CoupleContext';
 import type { AxiosError } from 'axios';
+import logoChick from '../../assets/logo-chick.gif';
 
 interface ApiErrorResponse {
   status: string;
@@ -55,7 +56,11 @@ export default function LoginPage() {
       <div className="w-full max-w-md mx-auto space-y-8">
         {/* Branding */}
         <div className="text-center">
-          <span className="text-5xl mb-4 block">👶</span>
+          <img
+            src={logoChick}
+            alt="BabyBase logo"
+            className="mx-auto mb-4 h-20 w-20"
+          />
           <h1 className="text-3xl font-bold text-text">Welcome Back</h1>
           <p className="mt-2 text-base text-text-secondary">
             Sign in to continue swiping on baby names

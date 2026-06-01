@@ -285,6 +285,8 @@ def _vector_name_for_mode(mode: str) -> str:
     """Return the Qdrant named vector to search for a given deck mode."""
     if mode == DeckMode.CROSS_CULTURAL:
         return "cross_cultural"
+    if mode == DeckMode.SOUNDS_LIKE:
+        return "phonetic_style"
     return "semantic"
 
 
@@ -338,6 +340,23 @@ def _build_query_embedding_for_mode(couple: Couple, mode: str) -> list[float]:
         if mutual_vectors:
             return _average_vectors(mutual_vectors)
         # Fall back: embed the couple profile text and search the cross_cultural space
+        profile = build_couple_retrieval_profile(couple)
+        text = build_couple_profile_text(profile)
+        return generate_embedding(text)
+
+    elif mode == DeckMode.SOUNDS_LIKE:
+        # Average the phonetic_style vectors of mutual likes
+        from core.services.embeddings import generate_embedding
+        from core.services.onboarding import (
+            _get_liked_phonetic_vectors,
+            build_couple_profile_text,
+        )
+        from core.services.qdrant_client import _average_vectors
+
+        mutual_vectors = _get_liked_phonetic_vectors(couple, mutual_only=True)
+        if mutual_vectors:
+            return _average_vectors(mutual_vectors)
+        # Fall back: embed the couple profile text (couple profile embedding)
         profile = build_couple_retrieval_profile(couple)
         text = build_couple_profile_text(profile)
         return generate_embedding(text)
@@ -726,6 +745,11 @@ def _build_explanation(payload: dict, mode: str) -> str:
         lang_count = len(languages)
         return (
             f"Travels well — used across {lang_count} languages"
+            f" with {origins_text} roots."
+        )
+    elif mode == DeckMode.SOUNDS_LIKE:
+        return (
+            f"Sounds like the names you both liked — {style_text} name"
             f" with {origins_text} roots."
         )
     else:

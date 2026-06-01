@@ -205,7 +205,7 @@ def compute_taste_vector(user):
         all_swipes.filter(action="dislike").values_list("created_at", flat=True)
     )
     dislike_count = len(disliked_name_ids)
-    total_swipes = total_likes + dislike_count
+    total_swipes = all_swipes.count()
     like_rate = total_likes / total_swipes if total_swipes > 0 else 0.0
 
     # Step 3: Apply recency weighting

@@ -212,6 +212,7 @@ class DeckMode(models.TextChoices):
     MORE_LIKE_THIS = "more_like_this", "More Like This"
     WILDCARD = "wildcard", "Wildcard"
     CROSS_CULTURAL = "cross_cultural", "Names That Travel"
+    SOUNDS_LIKE = "sounds_like", "Sounds Like"
 
 
 class LengthCategory(models.TextChoices):
@@ -249,6 +250,29 @@ class Name(BaseModel):
     active = models.BooleanField(default=True)
     x_2d = models.FloatField(null=True, blank=True, help_text="Precomputed 2D projection x-coordinate")
     y_2d = models.FloatField(null=True, blank=True, help_text="Precomputed 2D projection y-coordinate")
+    phonetic_profile = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "Cached Nova phonetic profile describing how the name sounds. "
+            "Empty dict means not yet enriched. Shape: "
+            '{"ipa": "ˈeɪdən", "rhyme": "-aden", "syllables": 2, '
+            '"stress": "primary on first syllable", '
+            '"sounds_like": "rhymes with Braden and Jayden; two beats, soft ending", '
+            '"model": "amazon.nova-lite-v1:0", "generated_at": "2026-06-01T12:00:00Z"}'
+        ),
+    )
+    pronunciation_audio = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "Reference to the Polly-generated pronunciation audio stored in S3. "
+            "Empty dict means no audio has been generated. Shape: "
+            '{"bucket": "babybase-pronunciation-audio-...", '
+            '"key": "pronunciations/<name_id>.mp3", "voice": "Joanna", '
+            '"content_type": "audio/mpeg", "generated_at": "2026-06-01T12:00:00Z"}'
+        ),
+    )
 
     class Meta:
         db_table = "core_name"

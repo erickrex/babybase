@@ -16,6 +16,7 @@ from core.serializers.swipes import (
     ShortlistRemovalSerializer,
     ShortlistSerializer,
     SimilarNameSerializer,
+    SoundsLikeNameSerializer,
     SwipeSerializer,
 )
 from core.services.couples import get_couple_for_user
@@ -24,6 +25,7 @@ from core.services.swipes import (
     check_mutual_match,
     create_match,
     get_similar_names,
+    get_sounds_like_names,
     record_swipe,
     validate_source_deck,
     validate_swipe,
@@ -237,6 +239,41 @@ def similar_names_view(request: Request, name_id: str) -> Response:
 
     similar = get_similar_names(name_id, couple)
     results = SimilarNameSerializer(similar, many=True).data
+
+    return Response(
+        {"status": "success", "data": results},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def sounds_like_view(request: Request, name_id: str) -> Response:
+    """
+    Get names that sound similar to a matched name ("Sounds Like").
+
+    GET /api/v1/matches/{name_id}/sounds-like/
+
+    Anchors on the name's stored phonetic_style vector in Qdrant (no
+    query-time embedding) and searches nearest neighbors in sound space,
+    excluding already-swiped names. Returns top 10 similar-sounding names.
+    """
+    couple = get_couple_for_user(request.user)
+    if not couple:
+        return Response(
+            {"status": "error", "message": "You must be in a couple to find similar-sounding names."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Verify the name exists
+    if not Name.objects.filter(id=name_id).exists():
+        return Response(
+            {"status": "error", "message": "Name not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    sounds_like = get_sounds_like_names(name_id, couple)
+    results = SoundsLikeNameSerializer(sounds_like, many=True).data
 
     return Response(
         {"status": "success", "data": results},
