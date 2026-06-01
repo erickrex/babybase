@@ -40,7 +40,7 @@ function getShortlistErrorMessage(error: unknown, fallback: string): string {
     return 'Your session expired. Please sign in again.';
   }
   if (status === 429) {
-    return 'Too many shortlist updates. Wait a moment and try again.';
+    return 'Too many finalist updates. Wait a moment and try again.';
   }
   if (apiError.request && !apiError.response) {
     return 'Network error. Check your connection and try again.';
@@ -49,9 +49,9 @@ function getShortlistErrorMessage(error: unknown, fallback: string): string {
 }
 
 /**
- * Shortlist page: ordered list of shortlisted names with reorder and compare.
+ * Finalists page: ordered list of shared finalists with compare.
  * Removing a name requires the partner's approval — one partner requests
- * removal, the other approves before the name leaves the shortlist.
+ * removal, the other approves before the name leaves the finalist list.
  */
 export default function ShortlistPage() {
   const { user } = useAuth();
@@ -68,7 +68,7 @@ export default function ShortlistPage() {
       const res = await api.get('/shortlist/');
       setItems(res.data.data || []);
     } catch (err) {
-      setError(getShortlistErrorMessage(err, 'Failed to load shortlist. Please try again.'));
+      setError(getShortlistErrorMessage(err, 'Failed to load finalists. Please try again.'));
     } finally {
       setIsLoading(false);
     }
@@ -84,7 +84,7 @@ export default function ShortlistPage() {
         // Fully removed (approved, or solo couple) — drop from the list
         setItems((prev) => prev.filter((item) => item.name.id !== nameId));
       } else {
-        // Still shortlisted but now pending removal — update the flag in place
+        // Still a finalist but now pending removal — update the flag in place
         setItems((prev) =>
           prev.map((item) =>
             item.name.id === nameId
@@ -94,7 +94,7 @@ export default function ShortlistPage() {
         );
       }
     } catch (err) {
-      setError(getShortlistErrorMessage(err, 'Failed to update shortlist. Please try again.'));
+      setError(getShortlistErrorMessage(err, 'Failed to update finalists. Please try again.'));
     }
   }, []);
 
@@ -112,7 +112,7 @@ export default function ShortlistPage() {
         )
       );
     } catch (err) {
-      setError(getShortlistErrorMessage(err, 'Failed to update shortlist. Please try again.'));
+      setError(getShortlistErrorMessage(err, 'Failed to update finalists. Please try again.'));
     }
   }, []);
 
@@ -138,7 +138,7 @@ export default function ShortlistPage() {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh]">
         <div className="w-10 h-10 border-3 border-primary border-t-transparent rounded-full animate-spin mb-4" />
-        <p className="text-text-secondary text-sm">Loading shortlist...</p>
+        <p className="text-text-secondary text-sm">Loading finalists...</p>
       </div>
     );
   }
@@ -149,7 +149,7 @@ export default function ShortlistPage() {
         <span className="text-5xl mb-4">⭐</span>
         <h2 className="text-xl font-bold text-text mb-2">No finalists yet</h2>
         <p className="text-text-secondary text-sm mb-4">
-          {error || 'Shortlist your favorite matches to compare them here.'}
+          {error || 'Add your favorite matches as finalists to compare them here.'}
         </p>
         {error && (
           <button
@@ -166,7 +166,7 @@ export default function ShortlistPage() {
   return (
     <div className="px-4 pt-6 pb-4">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-bold text-text">Shortlist</h1>
+        <h1 className="text-xl font-bold text-text">Finalists</h1>
         <button
           onClick={() => {
             setCompareMode(!compareMode);
@@ -195,7 +195,7 @@ export default function ShortlistPage() {
       )}
       {!compareMode && (
         <p className="text-xs text-text-muted mb-4">
-          Ranked by match strength
+          Shared names worth serious consideration
         </p>
       )}
 

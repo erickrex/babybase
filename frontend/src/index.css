@@ -2,52 +2,71 @@
 
 /*
  * BabyBase Design Tokens as CSS Custom Properties
- * Warm, emotional aesthetic — amber/coral palette
+ * DesertSunrise foundation + PacificCoast restraint + sage secondary.
+ * Mirrors frontend/src/theme/tokens.ts. See babybase_design_guide.md.
  */
 @theme {
-  /* Primary palette */
-  --color-primary: #f59e0b;
-  --color-primary-light: #fbbf24;
-  --color-primary-dark: #d97706;
-  --color-primary-muted: #fef3c7;
+  /* Primary palette — sunrise coral (--color-primary = CTA fill) */
+  --color-primary: #e35c45;
+  --color-primary-light: #fba47c;
+  --color-primary-dark: #b8412e;
+  --color-primary-muted: #fceae3;
 
-  /* Coral accent */
-  --color-coral: #fb7185;
-  --color-coral-light: #fecdd3;
-  --color-coral-dark: #e11d48;
+  /* Coral accent — brand coral */
+  --color-coral: #f2765c;
+  --color-coral-light: #fba47c;
+  --color-coral-dark: #b8412e;
 
-  /* Backgrounds */
-  --color-bg: #fffbf5;
+  /* Secondary — sage (use dusk text on --color-secondary) */
+  --color-secondary: #6fa088;
+  --color-secondary-light: #a7c7b5;
+  --color-secondary-dark: #568671;
+  --color-secondary-muted: #edf3ef;
+
+  /* Accent — soft amber (use dusk text on amber fills) */
+  --color-amber: #f5b45a;
+  --color-amber-light: #f8ce83;
+  --color-amber-dark: #d98a2b;
+  --color-amber-muted: #fbf1dc;
+
+  /* Backgrounds — warm off-white sand/clay */
+  --color-bg: #fdf8f2;
   --color-bg-card: #ffffff;
-  --color-bg-muted: #fef7ed;
+  --color-bg-muted: #f7efe4;
+  --color-bg-sunken: #f0e5d7;
 
-  /* Text */
-  --color-text: #1c1917;
-  --color-text-secondary: #57534e;
-  --color-text-muted: #a8a29e;
+  /* Text — readable dusk */
+  --color-text: #2c2521;
+  --color-text-secondary: #6b5b4e;
+  --color-text-muted: #9a897a;
 
-  /* Borders */
-  --color-border: #e7e5e4;
-  --color-border-focus: #f59e0b;
+  /* Borders — warm sand */
+  --color-border: #e8daca;
+  --color-border-strong: #d8c6b2;
+  --color-border-focus: #f2765c;
 
   /* Semantic */
-  --color-success: #10b981;
-  --color-error: #ef4444;
-  --color-info: #3b82f6;
+  --color-success: #3e9e7a;
+  --color-error: #dc5648;
+  --color-info: #4f9db0;
 
   /* Swipe feedback */
-  --color-swipe-like: #10b981;
-  --color-swipe-dislike: #ef4444;
-  --color-swipe-maybe: #f59e0b;
+  --color-swipe-like: #3e9e7a;
+  --color-swipe-dislike: #dc5648;
+  --color-swipe-maybe: #f5b45a;
 
   /* Match celebration */
-  --color-match-gold: #fbbf24;
+  --color-match-gold: #f5b45a;
 
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.08);
-  --shadow-elevated: 0 4px 16px rgba(0, 0, 0, 0.12);
-  --shadow-glow: 0 0 20px rgba(251, 191, 36, 0.25);
+  /* Shadows — warm-tinted, restrained */
+  --shadow-sm: 0 1px 2px rgba(44, 37, 33, 0.05);
+  --shadow-card: 0 2px 8px rgba(44, 37, 33, 0.08);
+  --shadow-elevated: 0 8px 24px rgba(44, 37, 33, 0.10);
+  --shadow-glow: 0 0 24px rgba(245, 180, 90, 0.30);
+
+  /* Gradients */
+  --gradient-sunrise: linear-gradient(135deg, #fba47c 0%, #f2765c 55%, #e35c45 100%);
+  --gradient-celebrate: radial-gradient(circle, #f8ce83 0%, #f5b45a 60%, #f2765c 100%);
 
   /* Radii */
   --radius-sm: 6px;
@@ -71,7 +90,7 @@
 /* Base styles */
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background-color: #f5f5f4;
+  background-color: #f0e5d7;
   color: var(--color-text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

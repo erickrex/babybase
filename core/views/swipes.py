@@ -212,6 +212,11 @@ def match_detail_view(request: Request, name_id: str) -> Response:
     )
 
 
+def _get_match_anchor(couple, name_id: str) -> MutualMatch | None:
+    """Return the current couple's mutual match for a match-scoped name endpoint."""
+    return MutualMatch.objects.filter(couple=couple, name_id=name_id).first()
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def similar_names_view(request: Request, name_id: str) -> Response:
@@ -230,10 +235,9 @@ def similar_names_view(request: Request, name_id: str) -> Response:
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Verify the name exists
-    if not Name.objects.filter(id=name_id).exists():
+    if _get_match_anchor(couple, name_id) is None:
         return Response(
-            {"status": "error", "message": "Name not found."},
+            {"status": "error", "message": "Match not found."},
             status=status.HTTP_404_NOT_FOUND,
         )
 
@@ -265,10 +269,9 @@ def sounds_like_view(request: Request, name_id: str) -> Response:
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Verify the name exists
-    if not Name.objects.filter(id=name_id).exists():
+    if _get_match_anchor(couple, name_id) is None:
         return Response(
-            {"status": "error", "message": "Name not found."},
+            {"status": "error", "message": "Match not found."},
             status=status.HTTP_404_NOT_FOUND,
         )
 
@@ -316,23 +319,23 @@ def _compute_semantic_breakdown(name: Name) -> dict:
 @permission_classes([IsAuthenticated])
 def shortlist_view(request: Request) -> Response:
     """
-    Combined shortlist endpoint.
+    Combined finalists endpoint. The route remains /shortlist/ for API compatibility.
 
-    GET /api/v1/shortlist/ — return shortlisted matches ordered by rank
-    POST /api/v1/shortlist/ — promote match to shortlisted status
-    DELETE /api/v1/shortlist/ — demote match back to active (remove from shortlist)
+    GET /api/v1/shortlist/ — return finalist matches ordered by rank
+    POST /api/v1/shortlist/ — promote match to finalist status
+    DELETE /api/v1/shortlist/ — demote match back to active (remove from finalists)
 
-    GET returns paginated shortlisted matches with name details, ordered by
+    GET returns paginated finalist matches with name details, ordered by
     match_strength_score desc. Supports ?page=N and ?page_size=N query params.
 
     POST and DELETE accept:
-        name_id: UUID of the matched name to (un)shortlist
+        name_id: UUID of the matched name to add/remove as a finalist
     """
     if request.method == "GET":
         couple = get_couple_for_user(request.user)
         if not couple:
             return Response(
-                {"status": "error", "message": "You must be in a couple to view shortlist."},
+                {"status": "error", "message": "You must be in a couple to view finalists."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -350,14 +353,14 @@ def shortlist_view(request: Request) -> Response:
     couple = get_couple_for_user(request.user)
     if not couple:
         return Response(
-            {"status": "error", "message": "You must be in a couple to manage shortlist."},
+            {"status": "error", "message": "You must be in a couple to manage finalists."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     if request.method == "DELETE":
         return _handle_shortlist_removal(request, couple)
 
-    # POST — promote to shortlisted
+    # POST — promote to finalist
     serializer = ShortlistSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(
@@ -370,26 +373,26 @@ def shortlist_view(request: Request) -> Response:
         match = MutualMatch.objects.select_related("name").get(couple=couple, name_id=name_id)
     except MutualMatch.DoesNotExist:
         return Response(
-            {"status": "error", "message": "Match not found. Only mutual matches can be shortlisted."},
+            {"status": "error", "message": "Match not found. Only mutual matches can become finalists."},
             status=status.HTTP_404_NOT_FOUND,
         )
 
     match.status = MatchStatus.SHORTLISTED
     match.save(update_fields=["status", "updated_at"])
-    logger.info("Match added to shortlist: couple=%s name=%s", couple.id, name_id)
+    logger.info("Match added to finalists: couple=%s name=%s", couple.id, name_id)
 
     return Response(
         {
             "status": "success",
             "data": _shortlist_match_payload(match),
-            "message": "Match added to shortlist.",
+            "message": "Match added to finalists.",
         },
         status=status.HTTP_200_OK,
     )
 
 
 def _shortlist_match_payload(match: MutualMatch) -> dict:
-    """Build the consistent response payload for a shortlist mutation."""
+    """Build the consistent response payload for a finalists mutation."""
     return {
         "id": str(match.id),
         "name_id": str(match.name_id),
@@ -403,7 +406,7 @@ def _shortlist_match_payload(match: MutualMatch) -> dict:
 
 
 def _handle_shortlist_removal(request: Request, couple) -> Response:
-    """Two-step shortlist removal requiring partner approval.
+    """Two-step finalists removal requiring partner approval.
 
     - Solo couple (no partner): removal is immediate.
     - decision="cancel": requester withdraws their own pending request.
@@ -424,7 +427,7 @@ def _handle_shortlist_removal(request: Request, couple) -> Response:
         match = MutualMatch.objects.select_related("name").get(couple=couple, name_id=name_id)
     except MutualMatch.DoesNotExist:
         return Response(
-            {"status": "error", "message": "Match not found. Only mutual matches can be shortlisted."},
+            {"status": "error", "message": "Match not found. Only mutual matches can become finalists."},
             status=status.HTTP_404_NOT_FOUND,
         )
 
@@ -444,8 +447,8 @@ def _handle_shortlist_removal(request: Request, couple) -> Response:
     # Solo couple — no partner to consult, remove immediately.
     if partner is None:
         _remove()
-        logger.info("Match removed from shortlist (solo couple): couple=%s name=%s", couple.id, name_id)
-        return _respond("Match removed from shortlist.")
+        logger.info("Match removed from finalists (solo couple): couple=%s name=%s", couple.id, name_id)
+        return _respond("Match removed from finalists.")
 
     # Explicit cancel: requester withdraws their own pending request.
     if decision == "cancel":
@@ -468,7 +471,7 @@ def _handle_shortlist_removal(request: Request, couple) -> Response:
         # The other partner already requested — this DELETE approves it.
         _remove()
         logger.info("Removal request approved: couple=%s name=%s", couple.id, name_id)
-        return _respond("Match removed from shortlist.")
+        return _respond("Match removed from finalists.")
 
     if match.removal_requested_by_id == request.user.id:
         # Already requested by me — idempotent, still waiting on partner.

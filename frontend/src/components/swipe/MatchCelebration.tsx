@@ -10,7 +10,7 @@ interface MatchCelebrationProps {
 export default function MatchCelebration({ matchName, onDismiss }: MatchCelebrationProps) {
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 animate-[fadeIn_0.3s_ease-out]"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-[rgba(44,37,33,0.55)] animate-[fadeIn_0.3s_ease-out]"
       onClick={onDismiss}
     >
       <div

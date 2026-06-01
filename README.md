@@ -342,7 +342,7 @@ All endpoints are under `/api/v1/`.
 | GET | `/matches/` | List mutual matches |
 | GET | `/matches/:name_id/` | Match detail |
 | GET | `/matches/:name_id/similar/` | Similar names |
-| GET/POST | `/shortlist/` | View/manage shortlist |
+| GET/POST | `/shortlist/` | View/manage finalists |
 | GET | `/constellation/` | 2D name map data |
 | GET | `/health/` | Health check |
 
@@ -398,4 +398,4 @@ babybase/
 3. **Onboard** - each partner sets name preferences (backgrounds, style, gender, length)
 4. **Swipe** - a recommendation deck is generated using semantic search (Qdrant) and multi-signal scoring; partners swipe independently
 5. **Match** - when both parents like the same name, it becomes a mutual match
-6. **Shortlist** - promote top matches to a shortlist for final decision
+6. **Finalists** - promote top matches to a focused decision list

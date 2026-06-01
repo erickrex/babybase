@@ -9,7 +9,7 @@ interface NavTab {
 const tabs: NavTab[] = [
   { path: '/deck', label: 'Deck', icon: '💛' },
   { path: '/matches', label: 'Matches', icon: '✨' },
-  { path: '/shortlist', label: 'Shortlist', icon: '⭐' },
+  { path: '/shortlist', label: 'Finalists', icon: '⭐' },
   { path: '/map', label: 'Map', icon: '🗺️' },
   { path: '/profile', label: 'Profile', icon: '👤' },
 ];

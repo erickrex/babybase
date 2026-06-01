@@ -83,13 +83,13 @@ class MatchDetailSerializer(serializers.Serializer):
 
 
 class ShortlistSerializer(serializers.Serializer):
-    """Serializer for adding a match to the shortlist."""
+    """Serializer for adding a match to finalists."""
 
     name_id = serializers.UUIDField()
 
 
 class ShortlistRemovalSerializer(serializers.Serializer):
-    """Serializer for shortlist removal-request actions.
+    """Serializer for finalists removal-request actions.
 
     decision controls the two-step removal flow:
     - omitted/null: request removal (or approve if partner already requested)

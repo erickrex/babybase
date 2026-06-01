@@ -36,7 +36,7 @@ function renderWithRouter(initialRoute: string) {
           path="/shortlist"
           element={
             <OnboardingGuard>
-              <div data-testid="shortlist-content">Shortlist Page</div>
+              <div data-testid="shortlist-content">Finalists Page</div>
             </OnboardingGuard>
           }
         />

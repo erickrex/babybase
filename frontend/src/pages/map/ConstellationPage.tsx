@@ -112,7 +112,7 @@ const BUBBLE_COLORS = [
 ];
 
 const STATUS_LABELS: Record<NameStatus, string> = {
-  shortlisted: 'Shortlisted',
+  shortlisted: 'Finalist',
   matched: 'Match',
   liked_by_you: 'Your like',
   liked_by_partner: 'Partner like',
@@ -145,7 +145,7 @@ function displayLabel(value: string): string {
 function bubbleSummary(bubble: ExploreBubble): string {
   const signals = [];
   if (bubble.shortlisted_count > 0) {
-    signals.push(`${bubble.shortlisted_count} shortlisted`);
+    signals.push(`${bubble.shortlisted_count} finalist${bubble.shortlisted_count === 1 ? '' : 's'}`);
   }
   if (bubble.matched_count > 0) {
     signals.push(`${bubble.matched_count} matched`);
@@ -274,7 +274,7 @@ function InsightsView({
 }) {
   const statItems = [
     { label: 'Matches', value: stats?.matched_count ?? 0 },
-    { label: 'Shortlist', value: stats?.shortlisted_count ?? 0 },
+    { label: 'Finalists', value: stats?.shortlisted_count ?? 0 },
     { label: 'Your likes', value: stats?.current_user_likes ?? 0 },
     ...(data.parents.partner
       ? [{ label: 'Partner likes', value: stats?.partner_likes ?? 0 }]

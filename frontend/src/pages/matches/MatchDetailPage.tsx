@@ -125,7 +125,7 @@ export default function MatchDetailPage() {
         </div>
       </div>
 
-      {/* Shortlist toggle */}
+      {/* Finalists toggle */}
       <button
         onClick={handleToggleShortlist}
         disabled={isUpdatingShortlist || isShortlisted}
@@ -135,11 +135,11 @@ export default function MatchDetailPage() {
             : 'bg-primary text-white hover:bg-primary-dark'
         }`}
       >
-        {isShortlisted ? '★ On your shortlist' : '☆ Add to Shortlist'}
+        {isShortlisted ? '★ In Finalists' : '☆ Add to Finalists'}
       </button>
       {isShortlisted && (
         <p className="text-xs text-text-muted text-center -mt-2 mb-4">
-          Manage removals from the Shortlist tab (removing needs your partner&apos;s approval).
+          Manage this shared finalist from the Finalists tab.
         </p>
       )}
 

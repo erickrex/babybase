@@ -57,7 +57,7 @@ export default function SwipeCard({ name, style, className = '' }: SwipeCardProp
           {name.age_style_category}
         </span>
         {historicalLabel && (
-          <span className="px-2.5 py-0.5 rounded-full bg-coral-light text-coral-dark text-xs font-medium">
+          <span className="px-2.5 py-0.5 rounded-full bg-amber-muted text-text text-xs font-medium">
             {historicalLabel}
           </span>
         )}

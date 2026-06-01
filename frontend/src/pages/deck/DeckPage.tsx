@@ -5,22 +5,16 @@ import { useDeck } from '../../hooks/useDeck';
 
 type DeckModeOption =
   | 'best_match'
-  | 'bridge_names'
-  | 'wildcard'
-  | 'cross_cultural'
   | 'sounds_like';
 
 const MODE_OPTIONS: { value: DeckModeOption; label: string; icon: string }[] = [
   { value: 'best_match', label: 'Best Match', icon: '✨' },
-  { value: 'bridge_names', label: 'Bridge Names', icon: '🌉' },
-  { value: 'cross_cultural', label: 'Travels', icon: '🌍' },
   { value: 'sounds_like', label: 'Sounds Like', icon: '🔊' },
-  { value: 'wildcard', label: 'Wildcards', icon: '🎲' },
 ];
 
 /**
  * Main deck page — integrates useDeck + SwipeDeck + MatchCelebration.
- * Includes mode toggle for Best Match / Bridge Names / Travels / Sounds Like / Wildcards.
+ * Includes a focused mode toggle for the primary semantic and phonetic decks.
  */
 export default function DeckPage() {
   const [selectedMode, setSelectedMode] = useState<DeckModeOption>('best_match');
@@ -100,7 +94,7 @@ export default function DeckPage() {
 
       {/* Mode toggle */}
       <div className="w-full max-w-[420px] mb-4">
-        <div className="grid grid-cols-2 sm:grid-cols-5 rounded-xl bg-bg-muted border border-border p-1 gap-1">
+        <div className="grid grid-cols-2 rounded-xl bg-bg-muted border border-border p-1 gap-1">
           {MODE_OPTIONS.map((option) => (
             <button
               key={option.value}
@@ -111,7 +105,7 @@ export default function DeckPage() {
                   : 'text-text-secondary hover:text-text'
               }`}
             >
-              <span className="block sm:inline sm:mr-1" aria-hidden="true">{option.icon}</span>
+              <span className="mr-1" aria-hidden="true">{option.icon}</span>
               <span>{option.label}</span>
             </button>
           ))}
@@ -128,31 +122,10 @@ export default function DeckPage() {
       )}
 
       {/* Mode-specific badge info */}
-      {selectedMode === 'bridge_names' && (
-        <div className="w-full max-w-[420px] mb-3 px-3 py-2 rounded-lg bg-primary-muted border border-primary/20">
-          <p className="text-xs text-primary-dark text-center">
-            🌉 Names that bridge both your backgrounds
-          </p>
-        </div>
-      )}
-      {selectedMode === 'cross_cultural' && (
-        <div className="w-full max-w-[420px] mb-3 px-3 py-2 rounded-lg bg-primary-muted border border-primary/20">
-          <p className="text-xs text-primary-dark text-center">
-            🌍 Names that travel across languages and cultures
-          </p>
-        </div>
-      )}
       {selectedMode === 'sounds_like' && (
         <div className="w-full max-w-[420px] mb-3 px-3 py-2 rounded-lg bg-primary-muted border border-primary/20">
           <p className="text-xs text-primary-dark text-center">
             🔊 Names that sound like the ones you both liked
-          </p>
-        </div>
-      )}
-      {selectedMode === 'wildcard' && (
-        <div className="w-full max-w-[420px] mb-3 px-3 py-2 rounded-lg bg-coral-light border border-coral/20">
-          <p className="text-xs text-coral-dark text-center">
-            🎲 Surprising picks outside your usual taste
           </p>
         </div>
       )}

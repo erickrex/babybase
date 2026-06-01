@@ -17,7 +17,7 @@ const coupleMapResponse = {
       mode: 'couple',
       summary: {
         title: 'Shared name taste',
-        body: '1 shortlisted name is anchoring your shared taste. The clearest neighborhood right now is Classic Spanish.',
+        body: '1 finalist is anchoring your shared taste. The clearest neighborhood right now is Classic Spanish.',
         stats: {
           matched_count: 1,
           shortlisted_count: 1,
@@ -52,7 +52,7 @@ const coupleMapResponse = {
               x: 0.2,
               y: 0.2,
               status: 'shortlisted',
-              reasons: ['Shortlisted together'],
+              reasons: ['Finalist together'],
               score: 0.91,
               rank: null,
             },
@@ -88,7 +88,7 @@ const coupleMapResponse = {
           x: 0.2,
           y: 0.2,
           status: 'shortlisted',
-          reasons: ['Shortlisted together'],
+          reasons: ['Finalist together'],
           score: 0.91,
           rank: null,
         },
@@ -225,7 +225,7 @@ describe('ConstellationPage', () => {
 
     expect(await screen.findByText('Name Map')).toBeInTheDocument();
     expect(screen.getByText('Shared name taste')).toBeInTheDocument();
-    expect(screen.getByText(/shortlisted name is anchoring/)).toBeInTheDocument();
+    expect(screen.getByText(/finalist is anchoring/)).toBeInTheDocument();
     expect(screen.getByText('Classic Spanish')).toBeInTheDocument();
     expect(screen.getAllByText('Sofia').length).toBeGreaterThan(0);
     expect(screen.getByText('Partner likes')).toBeInTheDocument();
@@ -238,7 +238,7 @@ describe('ConstellationPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Explore' }));
     expect(screen.getByText('Neighborhood Map')).toBeInTheDocument();
     expect(screen.getByText(/strongest taste groups/)).toBeInTheDocument();
-    expect(screen.getByText('1 shortlisted · 2 names')).toBeInTheDocument();
+    expect(screen.getByText('1 finalist · 2 names')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Individual Names' })).not.toBeInTheDocument();
     expect(screen.queryByText(/projected names/)).not.toBeInTheDocument();
   });

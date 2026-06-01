@@ -40,7 +40,7 @@ const shortlistResponse = {
   },
 };
 
-describe('ShortlistPage error handling', () => {
+describe('Finalists error handling', () => {
   beforeEach(() => {
     mockedApi.get.mockReset();
     mockedApi.delete.mockReset();
@@ -56,7 +56,7 @@ describe('ShortlistPage error handling', () => {
     });
   });
 
-  it('shows a retryable load error instead of an empty shortlist when loading fails', async () => {
+  it('shows a retryable load error instead of an empty finalists view when loading fails', async () => {
     mockedApi.get.mockRejectedValueOnce({ request: {} });
 
     render(<ShortlistPage />);
@@ -65,11 +65,11 @@ describe('ShortlistPage error handling', () => {
     expect(screen.getByRole('button', { name: 'Try Again' })).toBeInTheDocument();
   });
 
-  it('keeps the item visible and surfaces API messages when a shortlist update fails', async () => {
+  it('keeps the item visible and surfaces API messages when a finalist update fails', async () => {
     mockedApi.delete.mockRejectedValueOnce({
       response: {
         status: 400,
-        data: { message: 'Only matched names can be removed from the shortlist.' },
+        data: { message: 'Only matched names can be removed from finalists.' },
       },
     });
 
@@ -79,7 +79,7 @@ describe('ShortlistPage error handling', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Request removal of Sofia' }));
 
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('Only matched names can be removed from the shortlist.');
+      expect(screen.getByRole('alert')).toHaveTextContent('Only matched names can be removed from finalists.');
     });
     expect(screen.getByText('Sofia')).toBeInTheDocument();
   });

@@ -54,7 +54,7 @@ const deckResponse = {
   },
 };
 
-describe('DeckPage cross-cultural mode', () => {
+describe('DeckPage focused deck modes', () => {
   beforeEach(() => {
     mockedApi.post.mockReset();
     mockedApi.post.mockImplementation(async (url: string) => {
@@ -66,44 +66,18 @@ describe('DeckPage cross-cultural mode', () => {
     });
   });
 
-  it('calls the deck API with mode "cross_cultural" when the Travels option is selected', async () => {
+  it('keeps secondary deck modes out of the primary demo selector', async () => {
     render(<DeckPage />);
 
-    // Wait for the initial best_match deck to load and the mode toggle to render.
-    const travelsButton = await screen.findByRole('button', { name: /Travels/ });
+    await screen.findByRole('button', { name: /Best Match/ });
 
-    // Initial load uses the default best_match mode.
     expect(mockedApi.post).toHaveBeenCalledWith('/recommendations/deck/', {
       mode: 'best_match',
       force_refresh: false,
     });
-
-    fireEvent.click(travelsButton);
-
-    // Selecting cross-cultural re-runs useDeck with the new mode.
-    await waitFor(() => {
-      expect(mockedApi.post).toHaveBeenCalledWith(
-        '/recommendations/deck/',
-        expect.objectContaining({ mode: 'cross_cultural' })
-      );
-    });
-  });
-
-  it('renders the cross-cultural badge when the Travels option is selected', async () => {
-    render(<DeckPage />);
-
-    const travelsButton = await screen.findByRole('button', { name: /Travels/ });
-
-    // Badge is not shown for the default best_match mode.
-    expect(
-      screen.queryByText(/Names that travel across languages and cultures/)
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(travelsButton);
-
-    expect(
-      await screen.findByText(/Names that travel across languages and cultures/)
-    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Travels/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Bridge Names/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Wildcards/ })).not.toBeInTheDocument();
   });
 
   it('calls the deck API with mode "sounds_like" and renders its badge', async () => {

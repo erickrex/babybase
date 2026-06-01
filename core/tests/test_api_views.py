@@ -761,6 +761,81 @@ class TestCrossCulturalDeckView:
         assert couple.decks.count() == 2
 
 
+class TestSimilarNamesView:
+    """Regression tests for match-scoped semantic similar-name lookups."""
+
+    def _make_name(self, canonical_name: str = "Aiden") -> Name:
+        return Name.objects.create(
+            canonical_name=canonical_name,
+            display_name=canonical_name,
+            gender_usage=["boy"],
+            origin_backgrounds=["English"],
+            languages=["en"],
+            scripts=["Latin"],
+            variants=[],
+            length_category="short",
+            age_style_category="classic",
+            historical_significance_score=0.5,
+            semantic_summary="Similar-name anchor.",
+            active=True,
+        )
+
+    def _make_match(self, couple, user_a, user_b, name: Name) -> None:
+        Swipe.objects.create(couple=couple, user=user_a, name=name, action=SwipeAction.LIKE)
+        if user_b is not None:
+            Swipe.objects.create(couple=couple, user=user_b, name=name, action=SwipeAction.LIKE)
+        MutualMatch.objects.create(
+            couple=couple,
+            name=name,
+            match_strength_score=0.75,
+            status=MatchStatus.ACTIVE,
+        )
+
+    @patch("core.views.swipes.get_similar_names")
+    def test_existing_unmatched_name_returns_404(self, mock_similar, api_couple):
+        """A known name cannot anchor similar results until it is a mutual match."""
+        _, user_a, _ = api_couple
+        client = api_client_for(user_a)
+        unmatched = self._make_name()
+
+        response = client.get(f"/api/v1/matches/{unmatched.id}/similar/")
+
+        assert response.status_code == 404
+        assert response.data["status"] == "error"
+        assert response.data["message"] == "Match not found."
+        mock_similar.assert_not_called()
+
+    @patch("core.views.swipes.get_similar_names")
+    def test_matched_name_calls_service(self, mock_similar, api_couple):
+        """A current couple match can anchor similar-name search."""
+        couple, user_a, user_b = api_couple
+        client = api_client_for(user_a)
+        anchor = self._make_name()
+        similar = self._make_name("Braden")
+        self._make_match(couple, user_a, user_b, anchor)
+        mock_similar.return_value = [
+            {
+                "point_id": str(uuid.uuid4()),
+                "name_id": str(similar.id),
+                "canonical_name": similar.canonical_name,
+                "score": 0.91,
+                "payload": {
+                    "origin_backgrounds": similar.origin_backgrounds,
+                    "gender_usage": similar.gender_usage,
+                    "length_category": similar.length_category,
+                    "age_style_category": similar.age_style_category,
+                },
+            }
+        ]
+
+        response = client.get(f"/api/v1/matches/{anchor.id}/similar/")
+
+        assert response.status_code == 200
+        assert response.data["status"] == "success"
+        assert response.data["data"][0]["name_id"] == str(similar.id)
+        mock_similar.assert_called_once_with(str(anchor.id), couple)
+
+
 class TestSoundsLikeView:
     """Regression tests for the GET /matches/<name_id>/sounds-like/ endpoint.
 
@@ -805,13 +880,26 @@ class TestSoundsLikeView:
             },
         }
 
+    def _make_match(self, couple, user_a, user_b, name: Name) -> MutualMatch:
+        """Persist a mutual match so match-scoped recommendation endpoints can use it."""
+        Swipe.objects.create(couple=couple, user=user_a, name=name, action=SwipeAction.LIKE)
+        if user_b is not None:
+            Swipe.objects.create(couple=couple, user=user_b, name=name, action=SwipeAction.LIKE)
+        return MutualMatch.objects.create(
+            couple=couple,
+            name=name,
+            match_strength_score=0.75,
+            status=MatchStatus.ACTIVE,
+        )
+
     @patch("core.views.swipes.get_sounds_like_names")
     def test_returns_success_envelope_with_serialized_data(self, mock_sounds_like, api_couple):
         """A valid request returns 200 with {"status":"success","data":[...]}."""
-        couple, user_a, _ = api_couple
+        couple, user_a, user_b = api_couple
         client = api_client_for(user_a)
 
         anchor = self._make_name()
+        self._make_match(couple, user_a, user_b, anchor)
         similar = Name.objects.create(
             canonical_name="Braden",
             display_name="Braden",
@@ -852,9 +940,10 @@ class TestSoundsLikeView:
     @patch("core.views.swipes.get_sounds_like_names")
     def test_empty_results_still_success_envelope(self, mock_sounds_like, api_couple):
         """An empty service result (e.g. Qdrant down) still returns a 200 success envelope."""
-        _, user_a, _ = api_couple
+        couple, user_a, user_b = api_couple
         client = api_client_for(user_a)
         anchor = self._make_name()
+        self._make_match(couple, user_a, user_b, anchor)
         mock_sounds_like.return_value = []
 
         response = client.get(f"/api/v1/matches/{anchor.id}/sounds-like/")
@@ -879,7 +968,7 @@ class TestSoundsLikeView:
 
     @patch("core.views.swipes.get_sounds_like_names")
     def test_missing_name_returns_404(self, mock_sounds_like, api_couple):
-        """A request for a non-existent name gets a 404 error envelope; service not called."""
+        """A request for a non-existent match gets a 404 error envelope; service not called."""
         _, user_a, _ = api_couple
         client = api_client_for(user_a)
 
@@ -891,6 +980,20 @@ class TestSoundsLikeView:
         assert "message" in response.data
         mock_sounds_like.assert_not_called()
 
+    @patch("core.views.swipes.get_sounds_like_names")
+    def test_existing_unmatched_name_returns_404(self, mock_sounds_like, api_couple):
+        """A known name cannot anchor sounds-like results until it is a mutual match."""
+        _, user_a, _ = api_couple
+        client = api_client_for(user_a)
+        unmatched = self._make_name()
+
+        response = client.get(f"/api/v1/matches/{unmatched.id}/sounds-like/")
+
+        assert response.status_code == 404
+        assert response.data["status"] == "error"
+        assert response.data["message"] == "Match not found."
+        mock_sounds_like.assert_not_called()
+
     @patch("core.serializers.swipes.presign_audio_url")
     @patch("core.views.swipes.get_sounds_like_names")
     def test_audio_url_present_when_audio_stored(self, mock_sounds_like, mock_presign, api_couple):
@@ -900,9 +1003,10 @@ class TestSoundsLikeView:
         and presigns its stored audio; the presign is mocked to a sentinel so no
         S3 call is made and the response stays in the success envelope (Req 7.1, 7.3).
         """
-        _, user_a, _ = api_couple
+        couple, user_a, user_b = api_couple
         client = api_client_for(user_a)
         anchor = self._make_name()
+        self._make_match(couple, user_a, user_b, anchor)
 
         with_audio = Name.objects.create(
             canonical_name="Caden",
@@ -947,9 +1051,10 @@ class TestSoundsLikeView:
         without touching S3, and the response stays in the success envelope
         (Req 7.2, 7.3).
         """
-        _, user_a, _ = api_couple
+        couple, user_a, user_b = api_couple
         client = api_client_for(user_a)
         anchor = self._make_name()
+        self._make_match(couple, user_a, user_b, anchor)
 
         no_audio = Name.objects.create(
             canonical_name="Daxton",
