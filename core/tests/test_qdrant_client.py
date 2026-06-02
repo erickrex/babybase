@@ -1,5 +1,6 @@
 """Unit tests for core.services.qdrant_client singleton behavior."""
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -140,3 +141,46 @@ class TestSearchNames:
 
         # The legacy method must NOT have been called
         mock_client.search.assert_not_called()
+
+
+class TestGetNamesByFilter:
+    """Tests for filter-only retrieval (degraded fallback when no embedding)."""
+
+    @override_settings(QDRANT_COLLECTION="test_names")
+    @patch("core.services.qdrant_client.get_qdrant_client")
+    def test_uses_scroll_with_gender_filter_no_vector(self, mock_get_client):
+        """Filter-only retrieval uses scroll(), pushes gender, and requests no vectors."""
+        from core.services.qdrant_client import get_names_by_filter
+
+        mock_client = mock_get_client.return_value
+        mock_client.scroll.return_value = ([], None)
+
+        get_names_by_filter(filters={"active": True, "gender_usage": "boy"}, limit=25)
+
+        mock_client.scroll.assert_called_once()
+        kwargs = mock_client.scroll.call_args.kwargs
+        assert kwargs["collection_name"] == "test_names"
+        assert kwargs["limit"] == 25
+        assert kwargs["with_vectors"] is False
+        gender_conditions = [c for c in kwargs["scroll_filter"].must if getattr(c, "key", None) == "gender_usage"]
+        assert len(gender_conditions) == 1
+        assert gender_conditions[0].match.value == "boy"
+
+    @override_settings(QDRANT_COLLECTION="test_names")
+    @patch("core.services.qdrant_client.get_qdrant_client")
+    def test_excludes_ids_and_returns_zero_scores(self, mock_get_client):
+        """Excluded IDs are filtered out and every returned candidate has score 0.0."""
+        from core.services.qdrant_client import get_names_by_filter
+
+        kept = SimpleNamespace(id="keep-1", payload={"name_id": "n1", "canonical_name": "Ivan", "active": True})
+        mock_client = mock_get_client.return_value
+        mock_client.scroll.return_value = ([kept], None)
+
+        results = get_names_by_filter(filters={"active": True}, limit=10, exclude_ids=["drop-1"])
+
+        kwargs = mock_client.scroll.call_args.kwargs
+        assert kwargs["scroll_filter"].must_not[0].has_id == ["drop-1"]
+        assert len(results) == 1
+        assert results[0]["point_id"] == "keep-1"
+        assert results[0]["score"] == 0.0
+        assert results[0]["canonical_name"] == "Ivan"

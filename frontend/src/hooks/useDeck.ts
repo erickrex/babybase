@@ -36,11 +36,32 @@ interface ApiError {
     };
   };
   request?: unknown;
+  code?: string;
 }
 
 function getApiMessage(error: unknown, fallback: string): string {
   const apiError = error as ApiError;
   return apiError.response?.data?.message || fallback;
+}
+
+function getDeckErrorMessage(error: unknown): string {
+  const apiError = error as ApiError;
+  const status = apiError.response?.status;
+
+  // Axios sets code ECONNABORTED when the request exceeds its timeout.
+  if (apiError.code === 'ECONNABORTED') {
+    return 'Building your deck is taking longer than usual. Please try again.';
+  }
+  if (status === 503) {
+    return 'The recommendation service is busy right now. Please try again in a moment.';
+  }
+  if (status === 401) {
+    return 'Your session expired. Please sign in again.';
+  }
+  if (apiError.request && !apiError.response) {
+    return 'Network error. Check your connection and try again.';
+  }
+  return getApiMessage(error, 'Failed to load deck. Please try again.');
 }
 
 function getSwipeErrorMessage(error: unknown): string {
@@ -110,7 +131,7 @@ export function useDeck(mode: string = 'best_match') {
         tasteDrift: tasteDrift || null,
       });
     } catch (err: unknown) {
-      const message = getApiMessage(err, 'Failed to load deck');
+      const message = getDeckErrorMessage(err);
       setState((prev) => ({
         ...prev,
         deckId: null,

@@ -5,6 +5,7 @@ import logging
 import unicodedata
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
 
@@ -14,12 +15,23 @@ MODEL = "amazon.titan-embed-text-v2:0"
 EMBEDDING_DIM = 1024
 MAX_BATCH_SIZE = 20
 
+# Fail fast instead of hanging under the frontend's 30s request deadline.
+# A stalled cold-start embedding call was surfacing to users as a generic
+# "Failed to load deck"; bounded timeouts + a few retries make transient
+# Bedrock hiccups recover quickly rather than blocking the new-user path.
+_BEDROCK_TIMEOUT_CONFIG = Config(
+    connect_timeout=getattr(settings, "BEDROCK_CONNECT_TIMEOUT_SECONDS", 5),
+    read_timeout=getattr(settings, "BEDROCK_READ_TIMEOUT_SECONDS", 8),
+    retries={"max_attempts": 3, "mode": "adaptive"},
+)
+
 
 def _get_bedrock_client():
     """Return a boto3 Bedrock Runtime client configured from Django settings."""
     return boto3.client(
         "bedrock-runtime",
         region_name=settings.AWS_BEDROCK_REGION,
+        config=_BEDROCK_TIMEOUT_CONFIG,
     )
 
 

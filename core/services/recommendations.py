@@ -5,6 +5,7 @@ Handles the full pipeline: build query → retrieve from Qdrant → re-rank → 
 
 import logging
 
+from botocore.exceptions import BotoCoreError, ClientError
 from django.utils import timezone
 
 from core.models import (
@@ -20,13 +21,13 @@ from core.services.onboarding import (
     build_couple_retrieval_profile,
     compute_bridge_centroid,
 )
-from core.services.qdrant_client import search_names
+from core.services.qdrant_client import get_names_by_filter, search_names
 from core.services.relevance import (
     bridge_score,
     compute_final_score,
     couple_overlap_score,
     diversity_score,
-    explicit_filter_fit_score,
+    explicit_filter_fit_score_for_parents,
     novelty_score,
     semantic_fit_score,
 )
@@ -124,10 +125,25 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
     """
     from core.models import UserTasteVector
 
-    # Step 1: Build query embedding based on mode
-    logger.info("Building new deck: couple=%s mode=%s", couple.id, mode)
-    embedding = _build_query_embedding_for_mode(couple, mode)
+    # Step 1: Build query embedding based on mode. If the embedding backend
+    # (Bedrock) is unavailable, fall back to filter-only retrieval rather than
+    # failing the whole deck — a degraded but usable deck for the user.
     vector_name = _vector_name_for_mode(mode)
+    logger.info(
+        "🎴 [deck] Forming '%s' deck for couple=%s (vector space=%s)",
+        mode, couple.id, vector_name,
+    )
+    embedding_unavailable = False
+    try:
+        embedding = _build_query_embedding_for_mode(couple, mode)
+    except (ClientError, BotoCoreError, ValueError) as exc:
+        embedding = None
+        embedding_unavailable = True
+        logger.warning(
+            "🎴 [deck] Query embedding unavailable (%s) for couple=%s — "
+            "falling back to filter-only retrieval",
+            type(exc).__name__, couple.id,
+        )
 
     # Track whether Phase D was used (for sparse retrieval fallback)
     phase_used = None
@@ -137,13 +153,27 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
         phase_used = phase
         if phase == "phase_c":
             fallback_reason = _phase_data.get("reason")
+            logger.info(
+                "🎴 [deck] Personalization: Phase C (stated preferences) for couple=%s — reason=%s",
+                couple.id, fallback_reason,
+            )
+        else:
+            logger.info(
+                "🎴 [deck] Personalization: Phase D (learned taste vectors) for couple=%s",
+                couple.id,
+            )
 
     # Step 2: Get excluded name IDs (all previously swiped)
     excluded_name_ids = _get_excluded_name_ids(couple)
+    logger.info(
+        "🎴 [deck] Excluding %d already-swiped name(s) from retrieval: couple=%s",
+        len(excluded_name_ids), couple.id,
+    )
 
     # Step 3: Build payload filters from couple profile
     profile = build_couple_retrieval_profile(couple)
     filters = _build_payload_filters(profile)
+    logger.info("🎴 [deck] Retrieval filters: %s (couple=%s)", filters, couple.id)
 
     # Get Qdrant point IDs to exclude
     excluded_point_ids = _get_excluded_point_ids(excluded_name_ids)
@@ -153,18 +183,35 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
     if mode == "wildcard":
         retrieval_limit = DECK_SIZE * 3  # Cast wider net for wildcards
 
-    # Step 4: Query Qdrant
-    candidates = search_names(
-        embedding=embedding,
-        filters=filters,
-        limit=retrieval_limit,
-        exclude_ids=excluded_point_ids,
-        vector_name=vector_name,
-    )
+    # Step 4: Query Qdrant. When the embedding is unavailable, retrieve by
+    # payload filter only (no vector similarity) so the user still gets a deck.
+    if embedding_unavailable:
+        candidates = get_names_by_filter(
+            filters=filters,
+            limit=retrieval_limit,
+            exclude_ids=excluded_point_ids,
+        )
+        fallback_reason = "embedding_unavailable"
+        logger.info(
+            "🎴 [deck] Filter-only retrieval returned %d candidate(s) (no vector): couple=%s",
+            len(candidates), couple.id,
+        )
+    else:
+        candidates = search_names(
+            embedding=embedding,
+            filters=filters,
+            limit=retrieval_limit,
+            exclude_ids=excluded_point_ids,
+            vector_name=vector_name,
+        )
+        logger.info(
+            "🎴 [deck] Qdrant returned %d candidate(s) (limit=%d): couple=%s",
+            len(candidates), retrieval_limit, couple.id,
+        )
 
-    if not candidates:
+    if not candidates and not embedding_unavailable:
         # If no results with filters, try without strict filters
-        logger.warning("No candidates with filters, retrying without strict filters: couple=%s", couple.id)
+        logger.warning("🎴 [deck] No candidates with filters, retrying without strict filters: couple=%s", couple.id)
         candidates = search_names(
             embedding=embedding,
             filters={"active": True},
@@ -172,10 +219,25 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
             exclude_ids=excluded_point_ids,
             vector_name=vector_name,
         )
+        logger.info("🎴 [deck] Relaxed retrieval returned %d candidate(s): couple=%s", len(candidates), couple.id)
+    elif not candidates and embedding_unavailable:
+        logger.warning(
+            "🎴 [deck] No candidates with filters (embedding unavailable), retrying unfiltered: couple=%s",
+            couple.id,
+        )
+        candidates = get_names_by_filter(
+            filters={"active": True},
+            limit=retrieval_limit,
+            exclude_ids=excluded_point_ids,
+        )
+        logger.info(
+            "🎴 [deck] Relaxed filter-only retrieval returned %d candidate(s): couple=%s",
+            len(candidates), couple.id,
+        )
 
     # Step 4b: Sparse retrieval fallback — if Phase D was used and top score < 0.6,
     # discard results and regenerate with Phase C embedding
-    if phase_used == "phase_d" and candidates:
+    if not embedding_unavailable and phase_used == "phase_d" and candidates:
         top_score = max(c.get("score", 0.0) for c in candidates)
         min_retrieval_score = TRUST_THRESHOLDS["min_retrieval_score"]
         if top_score < min_retrieval_score:
@@ -225,6 +287,17 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
         parent_b_profile=parent_b_profile,
         mode=mode,
     )
+    if ranked_candidates:
+        top = ranked_candidates[0]
+        top_name = top.get("payload", {}).get("canonical_name") or top.get("name_id")
+        logger.info(
+            "🎴 [deck] Reranked %d candidate(s); top pick='%s' (rerank_score=%.3f, retrieval=%.3f): couple=%s",
+            len(ranked_candidates),
+            top_name,
+            top.get("rerank_score", 0.0),
+            top.get("retrieval_score", 0.0),
+            couple.id,
+        )
 
     # Step 5b: Check for sparse pool (fewer than 10 candidates above 0.5)
     above_threshold_count = sum(1 for c in ranked_candidates if c.get("rerank_score", 0) > 0.5)
@@ -242,6 +315,10 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
         ranked_candidates, deck_size=DECK_SIZE, relaxed=sparse_pool
     )
     final_candidates = _interleave_by_first_letter(final_candidates)
+    logger.info(
+        "🎴 [deck] Diversity + interleave produced %d final item(s) (cap=%d, relaxed=%s): couple=%s",
+        len(final_candidates), DECK_SIZE, sparse_pool, couple.id,
+    )
 
     # Compute quality metrics for logging
     user_a_confidence = 0.0
@@ -277,7 +354,10 @@ def generate_deck(couple: Couple, mode: str = "best_match") -> RecommendationDec
     # Step 7: Persist deck to DB (with quality metrics)
     deck = _persist_deck(couple, final_candidates, mode, profile, quality_metrics)
 
-    logger.info("Deck generated: id=%s couple=%s mode=%s items=%d", deck.id, couple.id, mode, len(final_candidates))
+    logger.info(
+        "🎴 [deck] Saved deck id=%s mode=%s items=%d phase=%s (couple=%s) — ready to swipe",
+        deck.id, mode, len(final_candidates), phase_used or "phase_c", couple.id,
+    )
     return deck
 
 
@@ -408,17 +488,33 @@ def _build_payload_filters(profile: dict) -> dict:
 
 
 def _get_parent_profiles(couple: Couple) -> tuple[dict, dict]:
-    """Get individual parent profiles for scoring."""
+    """Get individual parent profiles for scoring.
+
+    Carries each parent's explicit length/age/historical preferences (not just
+    backgrounds) so filter-fit scoring can honor each parent independently
+    rather than a merged-and-neutralized couple value.
+    """
     responses = list(
         OnboardingResponse.objects.filter(couple=couple).select_related("user")
     )
 
-    parent_a_profile = {"preferred_backgrounds": []}
-    parent_b_profile = {"preferred_backgrounds": []}
+    def _empty() -> dict:
+        return {
+            "preferred_backgrounds": [],
+            "preferred_length": None,
+            "preferred_age": None,
+            "historical_importance": None,
+        }
+
+    parent_a_profile = _empty()
+    parent_b_profile = _empty()
 
     for r in responses:
         profile_data = {
             "preferred_backgrounds": r.preferred_name_backgrounds or [],
+            "preferred_length": r.preferred_name_length,
+            "preferred_age": r.preferred_name_age,
+            "historical_importance": r.historical_importance,
         }
         if r.user_id == couple.user_a_id:
             parent_a_profile = profile_data
@@ -448,7 +544,9 @@ def _rerank_candidates(
 
         sem_score = semantic_fit_score(candidate.get("score"))
         overlap = couple_overlap_score(payload, parent_a_profile, parent_b_profile)
-        filter_fit = explicit_filter_fit_score(payload, profile)
+        filter_fit = explicit_filter_fit_score_for_parents(
+            payload, parent_a_profile, parent_b_profile
+        )
         parent_a_bg = parent_a_profile.get("preferred_backgrounds", [])
         parent_b_bg = parent_b_profile.get("preferred_backgrounds", [])
         residence = couple.residence_country or ""

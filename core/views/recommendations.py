@@ -94,13 +94,20 @@ def generate_deck_view(request: Request) -> Response:
     if not force_refresh:
         cached_deck = get_cached_deck(couple, mode)
         if cached_deck:
+            logger.info(
+                "🎴 [deck] Cache hit for couple=%s mode=%s — reusing deck id=%s (no Qdrant/Bedrock work)",
+                couple.id, mode, cached_deck.id,
+            )
             return Response(
                 {"status": "success", "data": _serialize_deck(cached_deck, cached=True, exclude_swiped=True)},
                 status=status.HTTP_200_OK,
             )
 
     # Generate the deck
-    logger.info("Generating deck: couple=%s mode=%s", couple.id, mode)
+    logger.info(
+        "🎴 [deck] Deck requested: couple=%s mode=%s force_refresh=%s — generating fresh deck",
+        couple.id, mode, force_refresh,
+    )
     try:
         deck = generate_deck(couple, mode=mode)
     except ImproperlyConfigured as exc:

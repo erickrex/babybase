@@ -146,6 +146,70 @@ def search_names(
     return output
 
 
+def get_names_by_filter(
+    filters: dict | None = None,
+    limit: int = 100,
+    exclude_ids: list[str] | None = None,
+) -> list[dict]:
+    """Retrieve names by payload filter only, with no vector similarity.
+
+    Used as a degraded fallback when a query embedding cannot be produced
+    (e.g. Bedrock is unavailable on the cold-start deck path). Returns the same
+    dict shape as ``search_names`` but every ``score`` is 0.0, since there is
+    no similarity ranking — downstream reranking still applies preference-fit
+    and diversity signals so the deck remains useful.
+    """
+    client = get_qdrant_client()
+
+    query_filter = _build_payload_filters(filters)
+    if filters is None or "active" not in filters:
+        active_condition = FieldCondition(key="active", match=MatchValue(value=True))
+        if query_filter is None:
+            query_filter = Filter(must=[active_condition])
+        else:
+            query_filter.must.append(active_condition)
+
+    exclude_set = set(exclude_ids or [])
+    if exclude_set:
+        exclude_condition = HasIdCondition(has_id=list(exclude_set))
+        if query_filter is None:
+            query_filter = Filter(must_not=[exclude_condition])
+        elif query_filter.must_not is None:
+            query_filter.must_not = [exclude_condition]
+        else:
+            query_filter.must_not.append(exclude_condition)
+
+    points, _next_page = client.scroll(
+        collection_name=settings.QDRANT_COLLECTION,
+        scroll_filter=query_filter,
+        limit=limit,
+        with_payload=True,
+        with_vectors=False,
+    )
+
+    output = []
+    for point in points:
+        point_id_str = str(point.id)
+        if point_id_str in exclude_set:
+            continue
+        payload = point.payload or {}
+        output.append(
+            {
+                "point_id": point_id_str,
+                "name_id": payload.get("name_id"),
+                "canonical_name": payload.get("canonical_name"),
+                "score": 0.0,
+                "payload": payload,
+            }
+        )
+
+    logger.info(
+        "Qdrant filter-only retrieval (no vector): limit=%d excluded=%d returned=%d",
+        limit, len(exclude_set), len(output),
+    )
+    return output
+
+
 def get_similar_to_names(
     name_ids: list[str],
     filters: dict | None = None,

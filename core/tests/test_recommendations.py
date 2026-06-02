@@ -179,6 +179,54 @@ class TestGenerateDeck:
         assert mock_search.call_count == 2
 
 
+class TestEmbeddingUnavailableFallback:
+    """When the embedding backend fails, deck falls back to filter-only retrieval."""
+
+    @patch("core.services.recommendations.get_names_by_filter")
+    @patch("core.services.recommendations.search_names")
+    @patch("core.services.recommendations._build_query_embedding_for_mode")
+    def test_bedrock_failure_falls_back_to_filter_only(
+        self, mock_embedding, mock_search, mock_filter, couple_with_onboarding, sample_names
+    ):
+        """A Bedrock failure yields a usable deck via filter-only retrieval, no crash."""
+        from botocore.exceptions import BotoCoreError
+
+        couple, _, _ = couple_with_onboarding
+        mock_embedding.side_effect = BotoCoreError()
+        # Filter-only retrieval returns candidates with score 0.0 (no vector).
+        candidates = [_make_qdrant_candidate(n, 0.0) for n in sample_names]
+        mock_filter.return_value = candidates
+
+        deck = generate_deck(couple, mode="best_match")
+
+        assert isinstance(deck, RecommendationDeck)
+        assert deck.items.count() > 0
+        # Vector search must NOT be used when the embedding is unavailable.
+        mock_search.assert_not_called()
+        mock_filter.assert_called()
+        # The degraded path is recorded for observability.
+        assert deck.retrieval_profile_json.get("fallback_reason") == "embedding_unavailable"
+
+    @patch("core.services.recommendations.get_names_by_filter")
+    @patch("core.services.recommendations._build_query_embedding_for_mode")
+    def test_filter_only_retries_unfiltered_when_empty(
+        self, mock_embedding, mock_filter, couple_with_onboarding, sample_names
+    ):
+        """Filter-only path retries without strict filters when the first pass is empty."""
+        from botocore.exceptions import BotoCoreError
+
+        couple, _, _ = couple_with_onboarding
+        mock_embedding.side_effect = BotoCoreError()
+        candidates = [_make_qdrant_candidate(n, 0.0) for n in sample_names]
+        # First filtered scroll empty, second (relaxed) returns candidates.
+        mock_filter.side_effect = [[], candidates]
+
+        deck = generate_deck(couple, mode="best_match")
+
+        assert deck.items.count() > 0
+        assert mock_filter.call_count == 2
+
+
 class TestExclusionLogic:
     """Tests for deck exclusion of previously swiped names."""
 

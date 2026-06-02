@@ -245,7 +245,8 @@ def test_text_builders_produce_template_conformant_output(name):
 @patch("core.services.embeddings.boto3.client")
 def test_get_bedrock_client_uses_configured_region(mock_boto3_client):
     """
-    Test that _get_bedrock_client uses settings.AWS_BEDROCK_REGION.
+    Test that _get_bedrock_client uses settings.AWS_BEDROCK_REGION and a
+    bounded-timeout Config (so a stalled Bedrock call fails fast and retries).
 
     Validates: Requirements 1.3
     """
@@ -255,10 +256,15 @@ def test_get_bedrock_client_uses_configured_region(mock_boto3_client):
 
     _get_bedrock_client()
 
-    mock_boto3_client.assert_called_once_with(
-        "bedrock-runtime",
-        region_name=settings.AWS_BEDROCK_REGION,
-    )
+    mock_boto3_client.assert_called_once()
+    args, kwargs = mock_boto3_client.call_args
+    assert args == ("bedrock-runtime",)
+    assert kwargs["region_name"] == settings.AWS_BEDROCK_REGION
+
+    config = kwargs["config"]
+    assert config.connect_timeout == settings.BEDROCK_CONNECT_TIMEOUT_SECONDS
+    assert config.read_timeout == settings.BEDROCK_READ_TIMEOUT_SECONDS
+    assert config.retries["max_attempts"] == 3
 
 
 @patch("core.services.embeddings._get_bedrock_client")

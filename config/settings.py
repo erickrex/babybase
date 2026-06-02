@@ -157,6 +157,11 @@ QDRANT_TIMEOUT_SECONDS = config("QDRANT_TIMEOUT_SECONDS", default=180, cast=int)
 
 # AWS Bedrock Configuration
 AWS_BEDROCK_REGION = config("AWS_BEDROCK_REGION", default="us-east-1")
+# Bounded timeouts for synchronous Bedrock embedding calls on the deck path.
+# Keep these well under the frontend's 30s request deadline so a stalled call
+# fails fast (and retries) instead of blocking deck generation.
+BEDROCK_CONNECT_TIMEOUT_SECONDS = config("BEDROCK_CONNECT_TIMEOUT_SECONDS", default=5, cast=int)
+BEDROCK_READ_TIMEOUT_SECONDS = config("BEDROCK_READ_TIMEOUT_SECONDS", default=8, cast=int)
 
 # Phonetic "Sounds Like" Configuration
 # Amazon Bedrock Nova model used to generate cached phonetic profiles
