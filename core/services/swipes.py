@@ -212,15 +212,36 @@ def _compute_match_strength(couple: Couple, name_id: str) -> float:
     return round(min(score, 1.0), 3)
 
 
+def _build_similar_name_filters(couple: Couple) -> dict:
+    """Build Qdrant payload filters for similar-name search.
+
+    Mirrors ``recommendations._build_payload_filters``: always require active
+    names and constrain to the couple's baby gender preference (unless the
+    couple is non_binary / mixed, which includes all genders). This keeps
+    "More Like This" and "Sounds Like" consistent with the swipe deck so a
+    boy-name match does not surface girl names.
+    """
+    from core.services.onboarding import build_couple_retrieval_profile
+
+    filters = {"active": True}
+    profile = build_couple_retrieval_profile(couple)
+    baby_gender = profile.get("baby_gender")
+    if baby_gender and baby_gender != "non_binary":
+        filters["gender_usage"] = baby_gender
+    return filters
+
+
 def get_similar_names(name_id: str, couple: Couple) -> list[dict]:
     """
     Find names similar to a given name, excluding already-swiped names.
 
-    Fetches the name's vector from Qdrant and searches for nearest neighbors.
+    Fetches the name's vector from Qdrant and searches for nearest neighbors,
+    constrained to the couple's baby gender preference.
 
     Args:
         name_id: UUID of the anchor name.
-        couple: The couple (used to exclude already-swiped names).
+        couple: The couple (used for gender filtering and to exclude
+            already-swiped names).
 
     Returns:
         List of similar name dicts from Qdrant (top 10).
@@ -241,10 +262,10 @@ def get_similar_names(name_id: str, couple: Couple) -> list[dict]:
     )
     swiped_point_ids = [str(pid) for pid in swiped_name_ids if pid]
 
-    # Search for similar names via Qdrant
+    # Search for similar names via Qdrant, constrained to the couple's gender.
     results = get_similar_to_names(
         name_ids=[str(vector_ref.qdrant_point_id)],
-        filters={"active": True},
+        filters=_build_similar_name_filters(couple),
         limit=10 + len(swiped_point_ids),  # Request extra to account for post-filtering
     )
 
@@ -288,12 +309,13 @@ def get_sounds_like_names(name_id: str, couple: Couple) -> list[dict]:
     )
     swiped_point_ids = [str(pid) for pid in swiped_name_ids if pid]
 
-    # Search for similar-sounding names via the phonetic_style named vector.
-    # Wrap the Qdrant call so any outage yields an empty result (Req 11.3).
+    # Search for similar-sounding names via the phonetic_style named vector,
+    # constrained to the couple's gender preference. Wrap the Qdrant call so
+    # any outage yields an empty result (Req 11.3).
     try:
         results = get_similar_to_names(
             name_ids=[str(vector_ref.qdrant_point_id)],
-            filters={"active": True},
+            filters=_build_similar_name_filters(couple),
             limit=10 + len(swiped_point_ids),  # Request extra to account for post-filtering
             vector_name="phonetic_style",
         )
