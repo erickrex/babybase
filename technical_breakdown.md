@@ -1,847 +1,288 @@
 # BabyBase Technical Breakdown
 
-This document explains how BabyBase recommendations, matching, vector search, and the name-map visualization work. It is intended for engineers who need to understand or modify the recommendation stack without reverse-engineering it from the Django services.
+How recommendations, matching, vector search, and the name map work. For engineers modifying the recommendation stack.
 
 ## System Overview
 
-BabyBase is a mobile-first baby-name discovery app. Users swipe through recommendation decks. A mutual match is created when both partners in the same couple like the same active name. Recommendation quality comes from a combination of:
+Mobile-first baby-name app. Users swipe through decks; a mutual match is created when both partners in a couple like the same active name. Recommendation quality comes from:
 
-- User onboarding preferences stored in PostgreSQL.
-- Name metadata such as origin, language, style, length, and historical importance.
-- Bedrock Titan Embed V2 embeddings.
-- Qdrant vector search across multiple named vector spaces.
-- Server-side reranking with explicit relevance, novelty, diversity, and bridge signals.
-- Taste vectors learned from user swipes after enough behavioral data exists.
+- Onboarding preferences (PostgreSQL).
+- Name metadata: origin, language, style, length, historical importance.
+- Bedrock Titan Embed V2 embeddings (1024-dim).
+- Qdrant vector search across three named vector spaces.
+- Server-side reranking (relevance, novelty, diversity, bridge).
+- Per-user taste vectors learned from swipes once behavioral data is strong enough.
 
 ```mermaid
 flowchart LR
-    subgraph Client["React frontend"]
-        DeckUI["Deck UI"]
-        SwipeUI["Swipe actions"]
-        FinalistsUI["Finalists"]
-        MapUI["Name map"]
-    end
-
-    subgraph API["Django REST API"]
-        RecViews["recommendations views"]
-        SwipeViews["swipe views"]
-        NameMapView["name map view"]
-    end
-
-    subgraph Services["Service layer"]
-        DeckService["recommendations.py"]
-        Relevance["relevance.py"]
-        Swipes["swipes.py"]
-        Taste["taste_vectors.py"]
-        Embeddings["embeddings.py"]
-        Projection["projection.py"]
-        NameMap["name_map.py"]
-    end
-
-    subgraph Storage["Data stores"]
-        Postgres[("PostgreSQL")]
-        Qdrant[("Qdrant collection")]
-        Bedrock["AWS Bedrock Titan Embed V2"]
-    end
-
-    DeckUI --> RecViews
-    SwipeUI --> SwipeViews
-    FinalistsUI --> SwipeViews
-    MapUI --> NameMapView
-
-    RecViews --> DeckService
-    DeckService --> Relevance
-    DeckService --> Taste
-    DeckService --> Qdrant
-    DeckService --> Postgres
-
-    SwipeViews --> Swipes
-    Swipes --> Postgres
-    Swipes --> Qdrant
-    Swipes --> Taste
-
-    NameMapView --> NameMap
-    NameMap --> Postgres
-    NameMap --> Projection
-
-    Embeddings --> Bedrock
-    Embeddings --> Qdrant
+    Client["React frontend"] --> API["Django REST API"]
+    API --> Services["Service layer"]
+    Services --> Postgres[("PostgreSQL")]
+    Services --> Qdrant[("Qdrant")]
+    Services --> Bedrock["Bedrock Titan Embed V2"]
 ```
 
 ## Code Map
 
-The recommendation behavior is split intentionally:
-
 | Area | Main files | Responsibility |
 | --- | --- | --- |
-| Deck API | `core/views/recommendations.py` | Validate request, reuse cached decks, return response envelopes. |
-| Deck creation | `core/services/recommendations.py` | Select vector space, query Qdrant, rerank, diversify, persist deck. |
-| Relevance scoring | `core/services/relevance.py` | Compute weighted relevance signals in the `[0.0, 1.0]` range. |
-| Swipe behavior | `core/views/swipes.py`, `core/services/swipes.py` | Validate deck/name/couple provenance, record swipes, create matches. |
-| Taste vectors | `core/services/taste_vectors.py` | Learn per-user vectors from swipes and decide Phase C vs Phase D. |
-| Embeddings | `core/services/embeddings.py` | Build embedding text and call Bedrock Titan Embed V2. |
-| Qdrant access | `core/services/qdrant_client.py` | Search named vectors, filter payloads, retrieve anchor vectors. |
-| Indexing | `core/management/commands/index_names_to_qdrant.py` | Generate named vectors and payloads for active names. |
-| PCA projection | `core/services/projection.py`, `core/management/commands/compute_projections.py` | Convert 1024-dimensional semantic vectors into 2D map coordinates. |
-| Name map | `core/services/name_map.py` | Assemble displayed map points, statuses, reasons, and neighborhoods. |
+| Deck API | `core/views/recommendations.py` | Validate request, reuse cached decks, response envelopes. |
+| Deck creation | `core/services/recommendations.py` | Select vector space, query Qdrant, rerank, diversify, persist. |
+| Relevance scoring | `core/services/relevance.py` | Weighted relevance signals in `[0.0, 1.0]`. |
+| Swipes/matches | `core/views/swipes.py`, `core/services/swipes.py` | Validate provenance, record swipes, create matches, similar-name search. |
+| Taste vectors | `core/services/taste_vectors.py` | Learn per-user vectors; decide Phase C vs D. |
+| Embeddings | `core/services/embeddings.py` | Build embedding text, call Bedrock. |
+| Qdrant access | `core/services/qdrant_client.py` | Search named vectors, filter payloads, retrieve anchors. |
+| Indexing | `core/management/commands/index_names_to_qdrant.py` | Generate named vectors + payloads for active names. |
+| PCA projection | `core/services/projection.py`, `compute_projections.py` | 1024-dim semantic vectors → 2D map coords. |
+| Name map | `core/services/name_map.py` | Assemble map points, statuses, neighborhoods. |
 
-## Data Model Concepts
+## Data Model
 
-The recommendation system depends on a few core concepts:
-
-- `Name`: canonical baby-name record with metadata and optional `x_2d` / `y_2d` visualization coordinates.
+- `Name`: canonical record with metadata and optional `x_2d`/`y_2d` map coords.
 - `NameVectorIndexRef`: maps a `Name` to a Qdrant point ID.
-- `Couple`: recommendation scope. Swipes and matches are scoped to a couple.
-- `Swipe`: a user's action on a name, usually `like`, `dislike`, or `maybe`.
+- `Couple`: the scope for swipes, matches, decks, exclusions.
+- `Swipe`: a user's `like` / `dislike` / `maybe` on a name.
 - `MutualMatch`: created when both partners in a two-person couple like the same name.
-- `RecommendationDeck`: cached recommendation batch for one couple and mode.
-- `RecommendationDeckItem`: a persisted deck item with score, rank, reason, and Qdrant result metadata.
-- `UserTasteVector`: learned per-user vector used for Phase D personalization after enough reliable swipes exist.
+- `RecommendationDeck` / `RecommendationDeckItem`: cached batch for one couple+mode; items store score, rank, explanation, retrieval metadata.
+- `UserTasteVector`: learned per-user vector for Phase D after enough reliable swipes.
 
-The important invariant is that swipes and matches are not global. They are scoped to the user's current couple.
+**Key invariant:** swipes and matches are scoped to the user's current couple, never global.
 
 ## Vector Indexing
 
-Each active name is indexed into Qdrant with three named 1024-dimensional vectors. All three vectors use the same Bedrock model, but they are generated from different text representations of the name.
+Each active name is indexed into Qdrant with three named 1024-dim vectors, all from Titan Embed V2 but built from different text views of the name.
 
-| Qdrant vector name | Built from | Used by |
+| Vector | Built from | Used by |
 | --- | --- | --- |
-| `semantic` | Meaning, origin, style, historical significance, summary text | Best match, bridge names, more like this, wildcard, PCA visualization |
-| `phonetic_style` | Pronunciation and sound-shape features | Sounds like |
-| `cross_cultural` | Languages, scripts, variants, international usability | Cross-cultural mode |
+| `semantic` | Meaning, origin, style, significance, summary | best_match, bridge_names, more_like_this, wildcard, PCA map |
+| `phonetic_style` | Pronunciation / sound-shape features | sounds_like |
+| `cross_cultural` | Languages, scripts, variants, international usability | cross_cultural |
 
-The collection is created by `index_names_to_qdrant` with named vectors:
+`index_names_to_qdrant` writes the points and `NameVectorIndexRef` rows. Qdrant payload fields:
 
-```mermaid
-flowchart TD
-    NameRows["Active Name rows"] --> TextBuilders["Build text views"]
-    TextBuilders --> SemanticText["semantic text"]
-    TextBuilders --> PhoneticText["phonetic/style text"]
-    TextBuilders --> CrossText["cross-cultural text"]
+`name_id`, `canonical_name`, `gender_usage`, `origin_backgrounds`, `languages`, `length_category`, `age_style_category`, `historical_importance` (string: `high`/`moderate`/`low`), `international_score`, `active`. Payload indexes exist for the filterable fields: `active`, `gender_usage`, `length_category`, `age_style_category`.
 
-    SemanticText --> BedrockSemantic["Titan Embed V2: 1024 dims"]
-    PhoneticText --> BedrockPhonetic["Titan Embed V2: 1024 dims"]
-    CrossText --> BedrockCross["Titan Embed V2: 1024 dims"]
+> Accuracy note: the payload stores the derived string `historical_importance`, not the float `historical_significance_score`. Reranking's `filter_fit` reads `historical_significance_score`, so in the live deck pipeline its historical axis is usually absent and contributes nothing — `filter_fit` effectively scores length and age. Closing this gap requires adding the score to the payload and reindexing.
 
-    BedrockSemantic --> Point["Qdrant PointStruct"]
-    BedrockPhonetic --> Point
-    BedrockCross --> Point
-
-    NameRows --> Payload["Payload metadata"]
-    Payload --> Point
-    Point --> Qdrant[("Qdrant collection")]
-    Point --> Ref["NameVectorIndexRef"]
-    Ref --> Postgres[("PostgreSQL")]
-```
-
-The Qdrant payload includes fields used by filters and reranking, including:
-
-- `name_id`
-- `canonical_name`
-- `gender_usage`
-- `origin_backgrounds`
-- `languages`
-- `length_category`
-- `age_style_category`
-- `historical_importance`
-- `international_score`
-- `active`
-
-### Example Indexing Text
-
-For a name like `Samuel`, the three embedding texts are intentionally different:
-
-```text
-semantic:
-Name: Samuel
-Origins: Hebrew
-Style: traditional
-Meaning and summary: heard by God; classic biblical name
-Historical importance: high
-
-phonetic_style:
-Name: Samuel
-Sound key: S-M-L
-Starts with: sa
-Ends with: el
-Vowel pattern: aue
-Consonant pattern: sml
-Syllables: 3
-
-cross_cultural:
-Name: Samuel
-Languages: English, Hebrew, Spanish, Portuguese, French
-Scripts and variants: Samuel, Samuele, Samuil
-International usability: high
-```
-
-This separation matters. `More like this` should find names that are semantically similar. `Sounds like` should find names with similar sound shape. If the phonetic text collapses into the same origin/variant text as the semantic text, those two features will overlap too much.
+When embedding text builders or the payload schema change, existing vectors are stale until reindexed.
 
 ## Deck Generation
 
-The frontend calls:
-
 ```http
-POST /api/v1/recommendations/deck/
+POST /api/v1/recommendations/deck/   { "mode": "best_match", "force_refresh": false }
 ```
 
-with a body like:
-
-```json
-{
-  "mode": "best_match",
-  "force_refresh": false
-}
-```
-
-`force_refresh` controls cache behavior:
-
-- Initial deck loads should use `false`.
-- Manual refreshes should use `true`.
-- Cached responses return HTTP `200` with `"cached": true`.
-- Fresh deck responses return HTTP `201` with `"cached": false`.
+`force_refresh`: initial loads use `false`; manual refreshes use `true`. Cached responses return `200` with `"cached": true`; fresh decks return `201` with `"cached": false`.
 
 ```mermaid
 sequenceDiagram
     participant FE as Frontend
-    participant View as generate_deck_view
-    participant Prep as prepare_couple_for_deck
-    participant Cache as get_cached_deck
+    participant View as deck view
     participant Deck as generate_deck
     participant Q as Qdrant
     participant DB as PostgreSQL
 
     FE->>View: POST /recommendations/deck/ {mode, force_refresh}
-    View->>Prep: Resolve couple and onboarding readiness
-    Prep-->>View: couple
-
-    alt force_refresh is false
-        View->>Cache: Look for unexpired deck with unswiped items
-        alt cache hit
-            Cache-->>View: latest usable deck
-            View-->>FE: 200 success, cached=true
-        else cache miss
-            View->>Deck: generate_deck(couple, mode)
-        end
-    else force_refresh is true
+    View->>View: prepare_couple_for_deck (onboarding readiness)
+    alt force_refresh=false and usable cache exists
+        View-->>FE: 200 cached=true
+    else
         View->>Deck: generate_deck(couple, mode)
+        Deck->>Q: query_points on selected named vector
+        Q-->>Deck: candidates + scores + payloads
+        Deck->>Deck: rerank, diversify, explain
+        Deck->>DB: save deck + items
+        View-->>FE: 201 cached=false
     end
-
-    Deck->>Q: query_points using selected named vector
-    Q-->>Deck: candidate names + scores + payloads
-    Deck->>Deck: rerank, diversify, explain
-    Deck->>DB: save RecommendationDeck + items
-    Deck-->>View: fresh deck
-    View-->>FE: 201 success, cached=false
 ```
 
-### Couple Preparation
+**Couple preparation** (`prepare_couple_for_deck`): solo users who finished solo onboarding get decks without a partner; two-person couples need both onboarded.
 
-`prepare_couple_for_deck` resolves whether the current user can receive recommendations:
-
-- A solo user who completed solo onboarding can get recommendations without a partner.
-- A solo user with no couple and incomplete onboarding is sent through preferences first.
-- A two-person couple needs both users to have completed onboarding.
-- The active couple is the unit for swipes, deck cache, exclusions, and matches.
-
-### Deck Cache Reuse
-
-The service reuses a previous deck only when all of these are true:
-
-- Same couple.
-- Same mode.
-- Deck has not expired.
-- Deck still has unswiped items for the current couple.
-- Request did not use `force_refresh: true`.
-
-This prevents unnecessary Qdrant and Bedrock work, while still allowing the user to manually refresh.
+**Cache reuse** requires all of: same couple, same mode, not expired, still has unswiped items, and `force_refresh` was not `true`.
 
 ## Recommendation Modes
 
-Each mode chooses a query embedding and Qdrant vector space.
-
-| Mode | Query embedding | Qdrant vector | Main intent |
+| Mode | Query embedding | Vector | Intent |
 | --- | --- | --- | --- |
-| `best_match` | Phase D taste midpoint if both users have trusted taste vectors, otherwise Phase C couple preference embedding | `semantic` | Best overall recommendations |
-| `bridge_names` | Bridge centroid for both parents' preferences | `semantic` | Names that connect both backgrounds |
-| `more_like_this` | Average semantic vector of mutual matches | `semantic` | Names similar in meaning, style, and cultural context |
-| `sounds_like` | Average phonetic vector of mutual matches | `phonetic_style` | Names similar in sound shape |
-| `cross_cultural` | Average cross-cultural vector of mutual matches, or profile fallback | `cross_cultural` | Names that travel across cultures and languages |
-| `wildcard` | Couple profile embedding with wider retrieval and special rerank boost | `semantic` | Plausible surprises outside obvious matches |
+| `best_match` | Phase D taste midpoint if both users trusted, else Phase C couple profile | `semantic` | Best overall |
+| `bridge_names` | Bridge centroid of both parents | `semantic` | Connect both backgrounds |
+| `more_like_this` | Avg semantic vector of mutual matches | `semantic` | Similar meaning/style |
+| `sounds_like` | Avg phonetic vector of mutual matches | `phonetic_style` | Similar sound |
+| `cross_cultural` | Avg cross-cultural vector of mutual matches, else profile fallback | `cross_cultural` | Travels across cultures |
+| `wildcard` | Couple profile embedding, wider retrieval + rerank boost | `semantic` | Plausible surprises |
 
-```mermaid
-flowchart TD
-    Mode["Requested mode"] --> SelectVector["Select Qdrant named vector"]
-    Mode --> BuildQuery["Build query embedding"]
+## Phase C vs Phase D
 
-    BuildQuery --> PhaseC["Phase C: onboarding profile"]
-    BuildQuery --> PhaseD["Phase D: learned taste vectors"]
-    BuildQuery --> Anchors["Mutual match anchor vectors"]
-    BuildQuery --> Bridge["Bridge centroid"]
+The system starts at Phase C (stated preferences) and moves to Phase D (learned taste) once behavior is strong enough.
 
-    SelectVector --> Semantic["semantic"]
-    SelectVector --> Phonetic["phonetic_style"]
-    SelectVector --> Cross["cross_cultural"]
+**Phase C** turns the merged couple profile into a `semantic` query: gender, parent backgrounds, residence country, style, length, historical importance.
 
-    PhaseC --> Search["Qdrant search"]
-    PhaseD --> Search
-    Anchors --> Search
-    Bridge --> Search
-    Semantic --> Search
-    Phonetic --> Search
-    Cross --> Search
-```
-
-## Phase C vs Phase D Personalization
-
-The system starts with Phase C recommendations, then moves to Phase D when behavior data is strong enough.
-
-### Phase C
-
-Phase C uses onboarding preference data:
-
-- Preferred gender usage.
-- Parent backgrounds.
-- Residence country.
-- Languages.
-- Style and length preferences.
-- Importance preferences.
-
-The service turns the couple profile into an embedding query and searches the `semantic` vector space.
-
-### Phase D
-
-Phase D uses learned taste vectors from swipes. The system recomputes a user's taste vector after every 5 swipes, but it trusts a vector only when quality thresholds are met:
+**Phase D** uses learned taste vectors. Trust thresholds (`TRUST_THRESHOLDS` in `taste_vectors.py`):
 
 | Threshold | Value |
 | --- | --- |
-| Minimum swipes | `20` |
-| Minimum like rate | `0.1` |
-| Maximum like rate | `0.8` |
-| Freshness window | `30` days |
-| Minimum retrieval score | `0.6` |
+| Min swipes | 20 |
+| Min like rate | 0.1 |
+| Max like rate | 0.8 |
+| Max staleness | 30 days |
+| Min retrieval score | 0.6 |
 
-Taste vectors are computed from liked names:
+Taste vector mechanics:
 
-- Recent likes get more weight, using a 14-day half-life.
-- If the like rate is extremely high and enough dislikes exist, the dislike centroid repels the taste vector.
-- Confidence is based on swipe count, like-rate quality, staleness, and fallback quality.
-- For a two-person couple, the Phase D query is a confidence-weighted midpoint of both trusted user vectors.
+- Recomputed every `TASTE_VECTOR_BATCH_SIZE = 5` swipes per user (not every card), since recompute fetches all liked embeddings from Qdrant.
+- Built as a recency-weighted like centroid (14-day half-life). If like rate is very high and enough dislikes exist, the dislike centroid repels the vector.
+- Confidence reflects swipe count, like-rate quality, staleness, and fallback quality.
+- For a couple, the Phase D query is the confidence-weighted midpoint of both trusted user vectors. If either user fails a threshold, fall back to Phase C.
+- Phase D only affects newly generated `best_match` decks; cached decks stay stable until refreshed, expired, or exhausted.
 
-```mermaid
-flowchart LR
-    Swipes["User swipes"] --> Count["Every 5 swipes"]
-    Count --> FetchVectors["Fetch liked-name semantic vectors"]
-    FetchVectors --> Recency["Apply recency weights"]
-    Recency --> LikeCentroid["Weighted like centroid"]
-    LikeCentroid --> DislikeCheck{"High like rate and enough dislikes?"}
-    DislikeCheck -- yes --> Repel["Subtract dislike centroid"]
-    DislikeCheck -- no --> Confidence["Compute confidence"]
-    Repel --> Confidence
-    Confidence --> Trusted{"Trusted for Phase D?"}
-    Trusted -- yes --> Midpoint["Couple confidence-weighted midpoint"]
-    Trusted -- no --> PhaseC["Fallback to Phase C"]
-    Midpoint --> PhaseD["Phase D deck query"]
-```
+> Accurate framing: BabyBase learns from swipe history in batches and applies it when generating fresh best-match decks once both partners have enough reliable signal — not instantly per swipe.
 
-## Qdrant Candidate Retrieval
+**Known limitations:** taste vectors are per-user (can carry history across couple contexts); a single centroid blurs multiple taste clusters; dislikes mostly act by exclusion; cached decks hide improvements until refresh; no UI surfaces whether a deck used Phase C or D.
 
-`search_names` is the low-level search function. It validates the embedding length, builds a Qdrant filter, and searches the selected named vector.
+## Qdrant Retrieval
 
-Inputs:
+`search_names` validates the embedding length, builds a filter, and searches the chosen named vector.
 
-- `embedding`: 1024-dimensional vector.
-- `filters`: active status, gender usage, length, style, or other payload filters.
-- `limit`: usually a multiple of the target deck size.
-- `exclude_ids`: Qdrant point IDs already swiped by the couple.
-- `vector_name`: `semantic`, `phonetic_style`, or `cross_cultural`.
+- `filters`: `active` (always, defaulted true) and `gender_usage` when the couple's `baby_gender` is not `non_binary`. The deck pipeline (`recommendations._build_payload_filters`) sets **only these two** — length/age/historical are reranking signals, not retrieval filters.
+- `exclude_ids`: couple's already-swiped point IDs, added as `must_not`.
+- `vector_name`: `semantic` / `phonetic_style` / `cross_cultural`.
 
-The search includes `active = true` by default and adds `must_not` conditions for excluded point IDs.
+If a filtered search returns nothing, deck generation retries with `active=true` only, so over-strict preferences don't empty the deck.
 
-```mermaid
-flowchart TD
-    QueryEmbedding["1024-d query embedding"] --> Validate["Validate dimensions"]
-    Filters["Couple filters"] --> BuildFilter["Build Qdrant filter"]
-    Exclusions["Already swiped names"] --> MustNot["must_not HasIdCondition"]
-    Validate --> Query["query_points"]
-    BuildFilter --> Query
-    MustNot --> Query
-    VectorName["Named vector"] --> Query
-    Query --> Results["Candidate points"]
-    Results --> Payloads["Scores + payloads"]
-```
-
-If the initial filtered search returns no candidates, deck generation retries with only `active = true`. This makes recommendations more resilient when preference filters are too strict.
+Why Qdrant: fast ANN over 1024-dim embeddings, named vectors (search the same name semantically/phonetically/cross-culturally), payload filters, retrieval-time exclusions, anchor-based search for similar-name features, and stable point IDs linked to PostgreSQL via `NameVectorIndexRef`. Division of labor: Qdrant finds candidates fast; Django applies product rules, scoring, diversity, provenance, caching; PostgreSQL is the source of truth.
 
 ## Reranking
 
-Qdrant returns nearest neighbors in the chosen vector space. BabyBase then reranks those candidates using explicit product signals.
-
-The weighted scoring contract is:
+Qdrant's neighbors are reranked with weighted product signals (`relevance.py`):
 
 ```text
-final_score =
-  semantic_fit   * 0.35 +
-  couple_overlap * 0.20 +
-  filter_fit     * 0.15 +
-  bridge         * 0.10 +
-  novelty        * 0.10 +
-  diversity      * 0.10
+final_score = semantic_fit   * 0.35
+            + couple_overlap  * 0.20
+            + filter_fit      * 0.25
+            + bridge          * 0.10
+            + novelty         * 0.05
+            + diversity       * 0.05
 ```
 
-All signals are floats in `[0.0, 1.0]`. Missing preference data is neutral and should not crash deck generation.
+All signals are `[0.0, 1.0]`; missing data is neutral (returns 0, never crashes or penalizes).
 
 | Signal | Meaning |
 | --- | --- |
 | `semantic_fit` | Normalized Qdrant retrieval score. |
-| `couple_overlap` | How well the name's origins overlap with both parents' preferred backgrounds. |
-| `filter_fit` | Fit against explicit preferences such as length, style, and historical importance. |
-| `bridge` | Whether the name bridges both parents' backgrounds or residence-language context. |
-| `novelty` | Whether the name introduces origins not already represented in the current deck. |
-| `diversity` | Whether the name adds variety in first letter, origin, and style. |
+| `couple_overlap` | Overlap of name origins with **both** parents' preferred backgrounds (scored per parent, averaged). |
+| `filter_fit` | Length / age / historical fit, scored **per parent** and averaged (see below). |
+| `bridge` | Bridges both parents' backgrounds and/or residence-language fit. |
+| `novelty` | Introduces origins not yet in the current deck. |
+| `diversity` | Adds variety in first letter, origin, style. |
+
+### filter_fit: per-parent with middle credit
+
+`explicit_filter_fit_score_for_parents` scores length/age/historical against **each parent independently, then averages**. This honors each parent rather than collapsing disagreement to a neutral value (the old merged-profile behavior, which erased the signal when parents differed). A name strongly matching one parent therefore outranks a bland compromise matching neither.
+
+Per axis: a direct match scores `1.0`, the opposite end `0.0`, and an in-between value `MIDDLE_CREDIT = 0.25` (~1/4 of a match). "In-between" means: length `medium`, age `timeless`, mid-band historical score (0.3–0.7 vs a high/low preference), or a parent who chose `any`/`balanced`. So compromise names still surface, ranked below direct matches.
+
+`filter_fit` weight was raised 0.15 → 0.25 (funded by lowering novelty and diversity 0.10 → 0.05 each) so stated preferences matter more. Weights still sum to 1.0; `semantic_fit` stays dominant.
 
 ```mermaid
 flowchart TD
-    Candidates["Qdrant candidates"] --> BaseScores["Compute semantic, overlap, filter, bridge"]
-    BaseScores --> Greedy["Greedy ranking loop"]
-    Greedy --> Novelty["Compute novelty vs already-ranked deck"]
-    Greedy --> Diversity["Compute diversity vs already-ranked deck"]
-    Novelty --> Weighted["Weighted final score"]
-    Diversity --> Weighted
-    Weighted --> ModeAdjust["Apply mode-specific adjustment"]
-    ModeAdjust --> Sort["Sort by rerank score"]
-    Sort --> Constraints["Apply diversity constraints"]
+    Candidates["Qdrant candidates"] --> Base["semantic, couple_overlap, filter_fit, bridge"]
+    Base --> Greedy["Greedy ranking loop"]
+    Greedy --> ND["novelty + diversity vs ranked-so-far"]
+    ND --> Weighted["Weighted final score"]
+    Weighted --> ModeAdj["Mode-specific adjustment"]
+    ModeAdj --> Constraints["Diversity constraints"]
     Constraints --> Interleave["Interleave by first letter"]
-    Interleave --> Deck["Persist top 50"]
+    Interleave --> Persist["Persist top 50"]
 ```
 
-### Mode-Specific Adjustments
+**Mode adjustments:** `bridge_names` adds a bridge boost; `wildcard` boosts diversity/novelty and latent compatibility over direct similarity; `cross_cultural` boosts `international_score`; `sounds_like` relies on the phonetic vector space rather than a boost.
 
-After the base weighted score, some modes apply additional boosts:
+**Diversity constraints:** deck capped at 50; limits how many names share a first letter, origin, or style. High-scoring names can bypass limits; sparse pools relax them.
 
-- `bridge_names`: adds a bridge boost.
-- `wildcard`: boosts diversity, novelty, and latent compatibility over direct similarity.
-- `cross_cultural`: boosts international usability.
-- `sounds_like`: relies primarily on the `phonetic_style` vector space rather than a special score boost.
+## Swipes and Mutual Matches
 
-### Diversity Constraints
-
-The deck is capped at 50 items. To avoid obvious repetition, deck generation limits how many names can share:
-
-- The same first letter.
-- The same origin.
-- The same style category.
-
-High-scoring names can bypass some constraints. If the pool is sparse, constraints relax so the deck can still be filled.
-
-### Example Candidate Scoring
-
-Assume a couple is generating a `best_match` deck and Qdrant returns `Mateo` as a candidate:
-
-```text
-semantic_fit:   0.82
-couple_overlap: 0.50
-filter_fit:     0.90
-bridge:         0.75
-novelty:        1.00
-diversity:      1.00
-
-final_score =
-  0.82 * 0.35 +
-  0.50 * 0.20 +
-  0.90 * 0.15 +
-  0.75 * 0.10 +
-  1.00 * 0.10 +
-  1.00 * 0.10
-
-final_score = 0.797
-```
-
-The persisted deck item stores the score, rank, explanation, Qdrant point ID, and retrieval metadata so the frontend can render a stable deck without recomputing it.
-
-## Worked Example: Creating A Deck
-
-Suppose a couple has these preferences:
-
-```json
-{
-  "parent_a_backgrounds": ["Hebrew", "Spanish"],
-  "parent_b_backgrounds": ["Irish"],
-  "residence_country": "United States",
-  "preferred_gender": "unisex",
-  "preferred_styles": ["classic", "international"],
-  "preferred_lengths": ["short", "medium"]
-}
-```
-
-For a first `best_match` deck:
-
-1. The frontend sends `mode = best_match` and `force_refresh = false`.
-2. The API checks for a cached unexpired `best_match` deck with unswiped items.
-3. If no cache exists, the service prepares a Phase C couple profile embedding.
-4. Qdrant searches the `semantic` vector space.
-5. Names already swiped by the couple are excluded.
-6. Payload filters keep active names and apply relevant gender/style/length constraints.
-7. The service reranks candidates with the weighted scoring formula.
-8. The service applies diversity constraints and first-letter interleaving.
-9. The top 50 names are saved as a `RecommendationDeck`.
-10. The API returns the deck with `cached = false`.
-
-For a later deck after both users have enough reliable swipe history:
-
-1. Each user's `UserTasteVector` has passed the trust thresholds.
-2. The service selects Phase D.
-3. The query vector becomes the confidence-weighted midpoint of both users' learned taste vectors.
-4. Retrieval still happens in the `semantic` vector space for `best_match`.
-5. Reranking and deck persistence work the same way.
-
-## Swipes And Mutual Matches
-
-Swipes are validated server-side because frontend state can be stale or manipulated.
-
-Validation checks:
-
-- The user belongs to the couple.
-- The submitted name exists and is active.
-- If `deck_id` is provided, the deck belongs to the same couple.
-- If `deck_id` is provided, the deck contains the submitted name.
-- Duplicate swipes are graceful and do not create false matches.
-
-```mermaid
-sequenceDiagram
-    participant FE as Frontend
-    participant View as swipe_view
-    participant Service as swipes.py
-    participant DB as PostgreSQL
-    participant Taste as taste_vectors.py
-
-    FE->>View: POST swipe {name_id, action, deck_id}
-    View->>Service: validate_swipe(user, name_id, couple)
-    Service-->>View: active name
-    View->>Service: validate_source_deck(couple, deck_id, name_id)
-    Service-->>View: valid provenance
-    View->>Service: record_swipe(user, couple, name, action)
-    Service->>DB: insert Swipe or return duplicate
-
-    alt stored action is like
-        View->>Service: check_mutual_match(couple, name)
-        alt both partners liked
-            View->>Service: create_match(couple, name)
-            Service->>DB: insert MutualMatch idempotently
-            View->>Taste: maybe_recompute_taste_vector(user)
-            View-->>FE: success, match created
-        else only one partner liked
-            View->>Taste: maybe_recompute_taste_vector(user)
-            View-->>FE: success, no match yet
-        end
-    else dislike or maybe
-        View->>Taste: maybe_recompute_taste_vector(user)
-        View-->>FE: success
-    end
-```
-
-### Match Example
-
-Assume Alex and Jordan are in the same couple:
-
-1. Alex likes `Samuel`.
-2. The service records Alex's swipe.
-3. No match exists yet because Jordan has not liked `Samuel`.
-4. Jordan later likes `Samuel`.
-5. The service sees both partners have `like` swipes for the same active name in the same couple.
-6. A `MutualMatch` is created.
-7. The matched name can now be used as an anchor for match-scoped similar-name features.
-
-Solo couples can receive recommendations, but they do not create mutual matches because there is no partner to confirm the name.
+Swipes are validated server-side (frontend state can be stale or manipulated): user belongs to the couple; name exists and is active; if `deck_id` is given, that deck belongs to the couple and contains the name. Duplicate swipes are graceful and never create false matches. A match is created only when both partners have a `like` on the same active name in the same couple. After each swipe, `maybe_recompute_taste_vector` runs (on batch boundaries). Solo couples get recommendations but never create matches.
 
 ## Finalists
 
-The UI label is `Finalists`. The backend route still uses the historical shortlist terminology for compatibility. Conceptually, finalists are names the couple has chosen to keep under active consideration.
+UI label is "Finalists"; the backend route keeps the historical `shortlist` term for compatibility. A match is behavioral (both liked it); a finalist is intentional (the couple elevated it to a saved set). The finalists list is ordered by `match_strength_score`.
 
-Finalists differ from matches:
+## More Like This and Sounds Like
 
-- A match is behavioral: both partners liked the same name.
-- A finalist is intentional: the couple has elevated a name to a saved decision set.
-- The name map and downstream UI can treat finalists as a higher-priority status than ordinary likes or recommendations.
+Anchor-based: retrieve the matched name's stored vector, then search the same space for neighbors, excluding the anchor and the couple's swiped names. **More Like This** uses `semantic`; **Sounds Like** uses `phonetic_style`. Both return the top 10.
 
-## More Like This And Sounds Like
+Both are **constrained to the couple's baby gender** (`_build_similar_name_filters`), pushing `gender_usage` into the Qdrant query the same way deck generation does — so a boy-name match does not surface girl names. `non_binary`/mixed couples are unfiltered.
 
-The similar-name features are anchor-based. They retrieve the selected name's stored vector, then search the same vector space for nearby names.
-
-```mermaid
-flowchart TD
-    Anchor["Matched anchor name"] --> Ref["NameVectorIndexRef"]
-    Ref --> Retrieve["Retrieve anchor vector from Qdrant"]
-    Retrieve --> VectorChoice{"Feature"}
-    VectorChoice -- "More like this" --> Semantic["semantic vector"]
-    VectorChoice -- "Sounds like" --> Phonetic["phonetic_style vector"]
-    Semantic --> Search["Search Qdrant with anchor vector"]
-    Phonetic --> Search
-    Search --> Exclude["Exclude anchor and already-swiped names"]
-    Exclude --> Results["Top 10 similar names"]
-```
-
-`More like this` uses the `semantic` named vector. It should return names that share meaning, style, origin context, or cultural usage.
-
-`Sounds like` uses the `phonetic_style` named vector. It should return names that share sound shape, syllable pattern, starts/ends, rhyme, or pronunciation traits.
-
-### Why Overlap Can Happen
-
-Overlap between these two lists can be legitimate when a cluster is both semantically and phonetically close. For example, `Samuel`, `Emanuel`, and `Manuel` share sound endings and also have related cultural usage.
-
-Too much overlap usually indicates one of these issues:
-
-- The anchor name has weak phonetic metadata.
-- The phonetic fallback text is too semantic or too origin-heavy.
-- Qdrant still contains old vectors after the embedding text builder changed.
-- The candidate space is small after filters and exclusions.
-
-When phonetic text changes, Qdrant must be reindexed before `sounds_like` behavior changes in the app.
+Some overlap between the two lists is legitimate when a cluster is both semantically and phonetically close (e.g. Samuel / Emanuel / Manuel). Excessive overlap usually means weak phonetic metadata, semantic-leaning fallback text, stale Qdrant vectors after a text-builder change, or a tiny post-filter candidate set.
 
 ## Cross-Cultural Search
 
-Cross-cultural mode is distinct from ordinary semantic matching. It searches the `cross_cultural` vector space, which is built from text about languages, scripts, variants, and international usability.
+Searches the `cross_cultural` space (built from languages, scripts, variants, international usability). Query is the average cross-cultural vector of mutual matches, or a couple-profile embedding fallback. Rerank boosts `international_score`. Results can overlap best_match but the retrieval basis and emphasis differ.
 
-```mermaid
-flowchart LR
-    Couple["Couple context"] --> Mutuals{"Mutual matches exist?"}
-    Mutuals -- yes --> AverageCross["Average cross-cultural vectors of mutual matches"]
-    Mutuals -- no --> ProfileCross["Embed couple profile fallback"]
-    AverageCross --> Search["Search cross_cultural vector"]
-    ProfileCross --> Search
-    Search --> Boost["Boost international_score in rerank"]
-    Boost --> Deck["Cross-cultural deck"]
-```
+## PCA Name Map
 
-This means cross-cultural recommendations can share some results with best-match recommendations, but the retrieval basis and reranking emphasis are different.
-
-## PCA Name-Map Visualization
-
-The name map uses the `semantic` vector space. It does not use the phonetic or cross-cultural vectors.
-
-The goal is to place names in a 2D coordinate system where semantic neighbors tend to appear near each other. The projection is computed offline by `compute_projections`.
-
-```mermaid
-flowchart TD
-    ActiveNames["Active names ordered by id"] --> Refs["NameVectorIndexRef"]
-    Refs --> QdrantVectors["Fetch semantic vectors from Qdrant"]
-    QdrantVectors --> Matrix["Build N x 1024 matrix"]
-    Matrix --> Center["Center each dimension"]
-    Center --> SVD["Deterministic SVD"]
-    SVD --> Components["Top 2 principal components"]
-    Components --> Project["Project vectors to 2D"]
-    Project --> Normalize["Normalize x and y to 0..1"]
-    Normalize --> Save["Save Name.x_2d and Name.y_2d"]
-    Save --> API["Name map API payload"]
-```
-
-The PCA math is:
+Uses the `semantic` space only. Coordinates are computed offline by `compute_projections`:
 
 ```text
-X        = matrix of semantic vectors, shape N x 1024
+X        = N x 1024 semantic vectors
 X_center = X - mean(X)
-SVD      = X_center = U * S * Vt
-PCs      = first two rows of Vt
-coords   = X_center * PCs.T
+SVD      = X_center = U S Vt
+coords   = X_center * (first two rows of Vt).T
 ```
 
-Then each axis is min-max normalized to `[0.0, 1.0]`. If an axis is degenerate, every point on that axis is assigned `0.5`.
+Each axis is min-max normalized to `[0,1]` (degenerate axis → 0.5). Component signs are fixed deterministically so the map is stable across runs.
 
-The implementation also fixes component sign deterministically. PCA axes can otherwise flip sign between runs while still being mathematically equivalent. The sign convention makes the generated map stable.
-
-### PCA Example
-
-Imagine a tiny semantic matrix with four names:
-
-```text
-Name       Vector dimensions, simplified
-Samuel     [0.70, 0.10, 0.40, ...]
-Daniel     [0.68, 0.12, 0.38, ...]
-Mateo      [0.20, 0.80, 0.35, ...]
-Saoirse    [0.10, 0.65, 0.90, ...]
-```
-
-PCA finds the two directions that explain the most variation across the full set of vectors. After projection and normalization, the map might place `Samuel` and `Daniel` near each other because their semantic vectors are close, while placing `Mateo` and `Saoirse` elsewhere based on different origin, language, and style signals.
-
-The exact axes are not manually named. They are latent semantic directions learned from the vector distribution.
-
-## Name Map Assembly
-
-`name_map.py` decides which names appear and how they are annotated. It pulls from:
-
-- Mutual matches.
-- Finalists.
-- Recent likes.
-- Latest unswiped deck recommendations.
-- Starter representatives from onboarding preferences.
-
-It assigns display statuses with priorities:
+`name_map.py` decides which names appear and annotates them, pulling from matches, finalists, recent likes, the latest unswiped deck, and onboarding starter representatives. Status priority:
 
 | Status | Priority |
 | --- | --- |
-| Finalist | `60` |
-| Matched | `50` |
-| Liked by you | `40` |
-| Liked by partner | `30` |
-| Recommended | `20` |
-| Starter | `10` |
+| Finalist | 60 |
+| Matched | 50 |
+| Liked by you | 40 |
+| Liked by partner | 30 |
+| Recommended | 20 |
+| Starter | 10 |
 
-Neighborhoods are grouped by style and primary origin, then summarized for the UI. The map is therefore not just raw PCA points. It combines vector geometry with the user's actual state in the app.
+Names are grouped into neighborhoods by style and primary origin. The map combines vector geometry with the user's actual app state.
 
-```mermaid
-flowchart LR
-    Matches["Matches"] --> Merge["Merge map candidates"]
-    Finalists["Finalists"] --> Merge
-    Likes["Recent likes"] --> Merge
-    Deck["Latest deck"] --> Merge
-    Starters["Preference starters"] --> Merge
-    Merge --> Status["Assign highest-priority status"]
-    Status --> Coords["Attach x_2d/y_2d"]
-    Coords --> Neighborhoods["Group neighborhoods"]
-    Neighborhoods --> Payload["Name map response"]
-```
+## Reliability Contracts
 
-## Recommendation Reliability Rules
-
-The system is designed to preserve these behavior contracts:
-
-- Deck generation excludes names already swiped by the couple.
+- Decks exclude names already swiped by the couple.
 - Duplicate swipes are graceful.
 - Matches require both partners to like the same name in the same couple.
-- A swipe with a deck ID must refer to a deck owned by the user's couple.
-- A swipe with a deck ID must refer to a name actually present in that deck.
-- Cached decks are reused only when they still contain unswiped items.
+- A swipe with a `deck_id` must reference a deck owned by the couple that contains the name.
+- Cached decks are reused only when they still hold unswiped items.
 - Missing preference data is neutral for scoring.
-- Similar-name features use the correct named vector space.
-- PCA coordinates are generated from semantic vectors only.
+- Similar-name features use the correct named vector and respect the couple's gender.
+- PCA coordinates come from semantic vectors only.
 
-## Operational Notes
+## Operations
 
-When the embedding text builders or Qdrant payload schema changes, existing Qdrant vectors are stale until reindexed.
-
-For this project, AWS commands should use the configured `erick_admin` profile and should verify identity before touching AWS:
+Verify AWS identity before any AWS-touching command, using the profile configured for the target account:
 
 ```bash
-export AWS_PROFILE=erick_admin
-export AWS_REGION=us-east-1
 aws sts get-caller-identity
 ```
 
-Common maintenance commands:
+Maintenance:
 
 ```bash
-# Reindex active names into Qdrant and recompute PCA projections.
+# Reindex active names into Qdrant (and, unless skipped, recompute PCA after).
 uv run python manage.py index_names_to_qdrant --force-recreate --batch-size 10
 
 # Recompute PCA coordinates from existing Qdrant semantic vectors.
 uv run python manage.py compute_projections --force
 ```
 
-Use a small batch size when calling Bedrock to avoid rate-limit pressure. The indexing command persists `NameVectorIndexRef` rows and, unless skipped, recomputes projections after indexing.
+Use a small Bedrock batch size to avoid rate-limit pressure.
 
-## Debugging Guide
+## Debugging
 
-### Deck Looks Too Repetitive
+**Deck too repetitive:** diversity constraints bypassed by uniformly high scores? candidate pool too small after filters/exclusions? cached deck reused instead of refreshed? origins/styles missing from payloads? → `recommendations.py`, `relevance.py`.
 
-Check:
+**More Like This and Sounds Like too similar:** does `phonetic_style` exist in Qdrant? reindexed after phonetic text changes? anchor has a rich phonetic profile? fallback text sound-shape based? candidate set too small? → `embeddings.py`, `qdrant_client.py`, `swipes.py`, `index_names_to_qdrant.py`.
 
-- Are diversity constraints being bypassed because most candidates have high scores?
-- Is the candidate pool too small after filters and exclusions?
-- Is the same cached deck being reused instead of a forced refresh?
-- Are origins/styles missing from payloads, causing diversity to see less variation?
+**Recommendations ignore taste:** each user ≥20 swipes? like rate in [0.1, 0.8]? vectors fresh? `maybe_recompute_taste_vector` ran? `select_phase` falling back to Phase C (check reason)? → `taste_vectors.py`.
 
-Useful files:
-
-- `core/services/recommendations.py`
-- `core/services/relevance.py`
-
-### More Like This And Sounds Like Are Too Similar
-
-Check:
-
-- Does the `phonetic_style` named vector exist in Qdrant?
-- Was Qdrant reindexed after phonetic text changes?
-- Does the anchor name have a rich `phonetic_profile`?
-- Is the fallback phonetic text sound-shape based rather than semantic?
-- Are filters leaving only a tiny candidate set?
-
-Useful files:
-
-- `core/services/embeddings.py`
-- `core/services/qdrant_client.py`
-- `core/services/swipes.py`
-- `core/management/commands/index_names_to_qdrant.py`
-
-### Recommendations Ignore User Taste
-
-Check:
-
-- Does each user have at least 20 swipes?
-- Is the like rate between 0.1 and 0.8?
-- Are taste vectors fresh enough?
-- Did `maybe_recompute_taste_vector` run after recent swipes?
-- Is `select_phase` falling back to Phase C with a reason?
-
-Useful file:
-
-- `core/services/taste_vectors.py`
-
-### Name Map Points Are Missing
-
-Check:
-
-- Does each active `Name` have `x_2d` and `y_2d`?
-- Does a `NameVectorIndexRef` exist for the name?
-- Can Qdrant retrieve the semantic vector for the point ID?
-- Were projections recomputed after reindexing?
-
-Useful files:
-
-- `core/services/projection.py`
-- `core/management/commands/compute_projections.py`
-- `core/services/name_map.py`
-
-## End-To-End Example: From Name Data To Match
-
-```mermaid
-sequenceDiagram
-    participant Admin as Data/indexing task
-    participant Bedrock as Bedrock Titan Embed V2
-    participant Q as Qdrant
-    participant DB as PostgreSQL
-    participant UserA as Parent A
-    participant UserB as Parent B
-    participant API as BabyBase API
-
-    Admin->>DB: Read active names
-    Admin->>Bedrock: Generate semantic, phonetic, cross-cultural embeddings
-    Bedrock-->>Admin: 1024-d vectors
-    Admin->>Q: Upsert named vectors + payloads
-    Admin->>DB: Save NameVectorIndexRef
-    Admin->>Q: Fetch semantic vectors for PCA
-    Admin->>DB: Save x_2d/y_2d
-
-    UserA->>API: Request best_match deck
-    API->>Q: Search semantic vector space
-    API->>DB: Save recommendation deck
-    API-->>UserA: Return deck
-
-    UserA->>API: Like Samuel
-    API->>DB: Save swipe
-    API-->>UserA: No match yet
-
-    UserB->>API: Like Samuel
-    API->>DB: Save swipe
-    API->>DB: Create MutualMatch
-    API-->>UserB: Match created
-
-    UserA->>API: More like this for Samuel
-    API->>Q: Search semantic vector from Samuel anchor
-    API-->>UserA: Similar names
-
-    UserA->>API: Sounds like Samuel
-    API->>Q: Search phonetic_style vector from Samuel anchor
-    API-->>UserA: Sound-alike names
-```
-
-This is the full recommendation loop: curated name data becomes embeddings, embeddings power Qdrant search, search results become ranked decks, swipes create matches, and matches become anchors for deeper exploration.
+**Name-map points missing:** name has `x_2d`/`y_2d`? `NameVectorIndexRef` exists? Qdrant can retrieve the semantic vector? projections recomputed after reindex? → `projection.py`, `compute_projections.py`, `name_map.py`.
