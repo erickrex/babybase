@@ -5,11 +5,13 @@ Tests each scoring signal independently with known inputs.
 
 
 from core.services.relevance import (
+    MIDDLE_CREDIT,
     bridge_score,
     compute_final_score,
     couple_overlap_score,
     diversity_score,
     explicit_filter_fit_score,
+    explicit_filter_fit_score_for_parents,
     novelty_score,
     semantic_fit_score,
 )
@@ -95,10 +97,10 @@ class TestCoupleOverlapScore:
 
 
 class TestExplicitFilterFitScore:
-    """Tests for explicit_filter_fit_score signal."""
+    """Tests for explicit_filter_fit_score signal (single profile)."""
 
     def test_all_match(self):
-        """All preferences match perfectly."""
+        """All preferences match the candidate's strong values → 1.0."""
         candidate = {
             "length_category": "short",
             "age_style_category": "classic",
@@ -113,13 +115,65 @@ class TestExplicitFilterFitScore:
         score = explicit_filter_fit_score(candidate, preferences)
         assert score == 1.0
 
-    def test_length_any_always_matches(self):
-        """preferred_length='any' always matches."""
+    def test_opposite_values_score_zero(self):
+        """Candidate at the opposite end of every preference → 0.0."""
+        candidate = {
+            "length_category": "long",
+            "age_style_category": "modern",
+            "historical_significance_score": 0.05,
+        }
+        preferences = {
+            "preferred_length": "short",
+            "preferred_age": "old",
+            "historical_importance": "high",
+        }
+
+        assert explicit_filter_fit_score(candidate, preferences) == 0.0
+
+    def test_middle_length_gets_partial_credit(self):
+        """A medium-length name is a compromise → MIDDLE_CREDIT, not full or zero."""
+        candidate = {"length_category": "medium"}
+        preferences = {"preferred_length": "short"}
+
+        assert explicit_filter_fit_score(candidate, preferences) == MIDDLE_CREDIT
+
+    def test_timeless_age_gets_partial_credit(self):
+        """A timeless name is between classic and modern → MIDDLE_CREDIT."""
+        candidate = {"age_style_category": "timeless"}
+        preferences = {"preferred_age": "old"}
+
+        assert explicit_filter_fit_score(candidate, preferences) == MIDDLE_CREDIT
+
+    def test_mid_historical_band_partial_for_high_pref(self):
+        """A mid-range historical score partially satisfies a 'high' preference."""
+        candidate = {"historical_significance_score": 0.5}
+        preferences = {"historical_importance": "high"}
+
+        assert explicit_filter_fit_score(candidate, preferences) == MIDDLE_CREDIT
+
+    def test_length_any_is_middle_ground(self):
+        """preferred_length='any' expresses no strong preference → MIDDLE_CREDIT."""
         candidate = {"length_category": "long"}
         preferences = {"preferred_length": "any"}
 
-        score = explicit_filter_fit_score(candidate, preferences)
-        assert score == 1.0
+        assert explicit_filter_fit_score(candidate, preferences) == MIDDLE_CREDIT
+
+    def test_balanced_age_is_middle_ground(self):
+        """preferred_age='balanced' expresses no strong preference → MIDDLE_CREDIT."""
+        candidate = {"age_style_category": "modern"}
+        preferences = {"preferred_age": "balanced"}
+
+        assert explicit_filter_fit_score(candidate, preferences) == MIDDLE_CREDIT
+
+    def test_averages_across_axes(self):
+        """Score averages the scored axes (full + opposite → 0.5)."""
+        candidate = {
+            "length_category": "short",  # matches → 1.0
+            "age_style_category": "modern",  # opposite of 'old' → 0.0
+        }
+        preferences = {"preferred_length": "short", "preferred_age": "old"}
+
+        assert explicit_filter_fit_score(candidate, preferences) == 0.5
 
     def test_null_candidate(self):
         """None candidate returns 0.0."""
@@ -132,6 +186,69 @@ class TestExplicitFilterFitScore:
     def test_empty_dicts(self):
         """Empty dicts return 0.0."""
         assert explicit_filter_fit_score({}, {}) == 0.0
+
+
+class TestExplicitFilterFitScoreForParents:
+    """Tests for the per-parent filter-fit scoring that honors each parent."""
+
+    def test_honors_each_parent_when_they_disagree(self):
+        """A name matching one parent's length outscores neither-matching names.
+
+        Parent A wants short, Parent B wants long. A short candidate fully
+        satisfies A (1.0) and is the opposite for B (0.0) → average 0.5, rather
+        than the signal being neutralized to nothing by a merged 'any'.
+        """
+        short_candidate = {"length_category": "short"}
+        parent_a = {"preferred_length": "short"}
+        parent_b = {"preferred_length": "long"}
+
+        score = explicit_filter_fit_score_for_parents(
+            short_candidate, parent_a, parent_b
+        )
+        assert score == 0.5
+
+    def test_name_matching_both_parents_scores_full(self):
+        """When both parents want short and the name is short → 1.0."""
+        candidate = {"length_category": "short"}
+        parent_a = {"preferred_length": "short"}
+        parent_b = {"preferred_length": "short"}
+
+        assert explicit_filter_fit_score_for_parents(candidate, parent_a, parent_b) == 1.0
+
+    def test_middle_name_beats_opposite_when_parents_disagree(self):
+        """A compromise (medium) name scores MIDDLE_CREDIT for both → MIDDLE_CREDIT.
+
+        This is below a name that fully matches one parent (0.5), so direct
+        matches still rank higher than compromises, but compromises still
+        surface above opposite-end names (which would score 0.0 for one parent).
+        """
+        medium_candidate = {"length_category": "medium"}
+        parent_a = {"preferred_length": "short"}
+        parent_b = {"preferred_length": "long"}
+
+        score = explicit_filter_fit_score_for_parents(
+            medium_candidate, parent_a, parent_b
+        )
+        assert score == MIDDLE_CREDIT
+
+    def test_falls_back_to_single_parent(self):
+        """When only one parent has explicit prefs, use that parent's score."""
+        candidate = {"length_category": "short"}
+        parent_a = {"preferred_length": "short"}
+        parent_b = {"preferred_backgrounds": []}  # no explicit length/age/hist
+
+        assert explicit_filter_fit_score_for_parents(candidate, parent_a, parent_b) == 1.0
+
+    def test_no_preferences_returns_zero(self):
+        """No explicit preferences on either parent → 0.0 (null-safe)."""
+        candidate = {"length_category": "short"}
+        assert explicit_filter_fit_score_for_parents(candidate, {}, {}) == 0.0
+
+    def test_null_candidate_returns_zero(self):
+        """None candidate returns 0.0."""
+        parent_a = {"preferred_length": "short"}
+        parent_b = {"preferred_length": "long"}
+        assert explicit_filter_fit_score_for_parents(None, parent_a, parent_b) == 0.0
 
 
 class TestBridgeScore:

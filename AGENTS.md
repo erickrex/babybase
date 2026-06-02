@@ -107,7 +107,8 @@ Preserve these unless the user explicitly asks for a product change.
 
 - Scoring signals return floats in `[0.0, 1.0]`.
 - Missing preference data is neutral: return 0 for that signal, never crash or penalize.
-- Keep the weighted scoring contract: semantic 0.35, couple overlap 0.20, filter fit 0.15, bridge 0.10, novelty 0.10, diversity 0.10.
+- Keep the weighted scoring contract: semantic 0.35, couple overlap 0.20, filter fit 0.25, bridge 0.10, novelty 0.05, diversity 0.05.
+- Filter fit (length/age/historical) is scored per parent and averaged so each parent's preference is honored independently; a name matching one parent outranks a bland compromise. "Middle"/compromise values (medium length, timeless style, mid historical band, or an `any`/`balanced` preference) earn `MIDDLE_CREDIT` (~1/4 of a direct match) so they still surface, ranked below direct matches.
 - Cap candidates before expensive scoring to avoid accidental O(n squared) work.
 - Re-check server-side swipe validity because frontend data can be stale.
 - Cache recommendation decks by couple and mode; regenerate only when forced, expired, or exhausted for the current user/couple.

@@ -4,13 +4,22 @@ Each scoring signal is an independent, null-safe method returning a float in [0.
 Missing data always returns 0.0 — never crashes, never penalizes.
 """
 
-# Scoring weights from design doc
+# Scoring weights from design doc.
+# filter_fit is weighted to honor each parent's explicit length/age/historical
+# preferences (raised from 0.15); the deck-internal variety signals (novelty,
+# diversity) are trimmed to fund it. Weights sum to 1.0.
 W_SEMANTIC = 0.35
 W_COUPLE_OVERLAP = 0.20
-W_FILTER_FIT = 0.15
+W_FILTER_FIT = 0.25
 W_BRIDGE = 0.10
-W_NOVELTY = 0.10
-W_DIVERSITY = 0.10
+W_NOVELTY = 0.05
+W_DIVERSITY = 0.05
+
+# Credit for a "middle"/compromise name that sits between preferences (e.g. a
+# medium-length name when a parent wants short, a timeless name when they want
+# classic, a mid-range historical score). Roughly 1/4 of a full preference
+# match so these names still surface, just ranked below direct matches.
+MIDDLE_CREDIT = 0.25
 
 
 def _first_letter(value: object) -> str | None:
@@ -101,17 +110,95 @@ def couple_overlap_score(
         return 0.0
 
 
+def _length_fit(pref_length: object, cand_length: object) -> float | None:
+    """Score a name's length against one length preference.
+
+    Returns 1.0 for a direct match, MIDDLE_CREDIT for a "middle" name (the
+    candidate is medium, or the parent has no strong preference via "any"),
+    0.0 for the opposite end, or None when there is nothing to score.
+    """
+    if not cand_length:
+        return None
+    if pref_length == "any":
+        return MIDDLE_CREDIT  # No strong preference → treat as middle ground
+    if not pref_length:
+        return None
+    if cand_length == "medium":
+        return MIDDLE_CREDIT  # Between short and long
+    return 1.0 if pref_length == cand_length else 0.0
+
+
+def _age_fit(pref_age: object, cand_age: object) -> float | None:
+    """Score a name's age style against one age preference.
+
+    "old" maps to candidate "classic", "new" to "modern". "balanced" means no
+    strong preference (middle credit). "timeless" candidates are themselves a
+    middle style and get middle credit against a specific preference.
+    """
+    if not cand_age:
+        return None
+    if pref_age == "balanced":
+        return MIDDLE_CREDIT  # No strong preference → middle ground
+    if not pref_age:
+        return None
+    if cand_age == "timeless":
+        return MIDDLE_CREDIT  # Between classic and modern
+    if pref_age == "old":
+        return 1.0 if cand_age == "classic" else 0.0
+    if pref_age == "new":
+        return 1.0 if cand_age == "modern" else 0.0
+    return None
+
+
+def _historical_fit(pref_hist: object, cand_hist_score: object) -> float | None:
+    """Score a name's historical significance against one preference.
+
+    historical_significance_score is a float in [0, 1]. We treat <0.3 as low,
+    0.3-0.7 as the middle band, and >0.7 as high. A direct match scores 1.0,
+    the opposite end 0.0, and the middle band MIDDLE_CREDIT either way.
+    """
+    if cand_hist_score is None or not pref_hist:
+        return None
+    try:
+        score = float(cand_hist_score)
+    except (TypeError, ValueError):
+        return None
+
+    if score < 0.3:
+        band = "low"
+    elif score <= 0.7:
+        band = "medium"
+    else:
+        band = "high"
+
+    if band == "medium":
+        return 1.0 if pref_hist == "medium" else MIDDLE_CREDIT
+    # band is "low" or "high": full credit on match, middle pref gets partial,
+    # opposite end gets nothing.
+    if pref_hist == band:
+        return 1.0
+    if pref_hist == "medium":
+        return MIDDLE_CREDIT
+    return 0.0
+
+
 def explicit_filter_fit_score(
     candidate: dict | None,
     preferences: dict | None,
 ) -> float:
     """
-    Score how well a name matches explicit couple preferences (length, age style, historical).
+    Score how well a name matches explicit preferences (length, age, historical).
+
+    Honors each preference axis independently and gives partial ("middle")
+    credit to compromise names so they still surface, ranked below direct
+    matches. ``preferences`` may be a single merged couple profile or one
+    parent's profile; ``explicit_filter_fit_score_for_parents`` averages two
+    parents to honor each individually.
 
     Args:
         candidate: Dict with name payload (length_category, age_style_category,
                    historical_significance_score).
-        preferences: Dict with couple preferences (preferred_length, preferred_age,
+        preferences: Dict with preferences (preferred_length, preferred_age,
                      historical_importance).
 
     Returns:
@@ -121,59 +208,69 @@ def explicit_filter_fit_score(
         return 0.0
 
     try:
-        score = 0.0
-        checks = 0
-
-        # Length match
-        pref_length = preferences.get("preferred_length")
-        cand_length = candidate.get("length_category")
-        if pref_length and pref_length != "any" and cand_length:
-            checks += 1
-            if pref_length == cand_length:
-                score += 1.0
-        elif pref_length == "any":
-            checks += 1
-            score += 1.0  # "any" always matches
-
-        # Age style match
-        pref_age = preferences.get("preferred_age")
-        cand_age = candidate.get("age_style_category")
-        if pref_age and cand_age:
-            checks += 1
-            if pref_age == "balanced":
-                score += 0.8  # balanced accepts all styles with slight preference
-            elif pref_age == "old" and cand_age == "classic":
-                score += 1.0
-            elif pref_age == "new" and cand_age == "modern":
-                score += 1.0
-            elif cand_age == "timeless":
-                score += 0.7  # timeless partially matches any preference
-
-        # Historical importance match
-        pref_hist = preferences.get("historical_importance")
-        cand_hist_score = candidate.get("historical_significance_score")
-        if pref_hist and cand_hist_score is not None:
-            checks += 1
-            cand_hist_score = float(cand_hist_score)
-            if pref_hist == "high" and cand_hist_score > 0.7:
-                score += 1.0
-            elif pref_hist == "high" and cand_hist_score > 0.3:
-                score += 0.5
-            elif pref_hist == "medium" and 0.3 <= cand_hist_score <= 0.7:
-                score += 1.0
-            elif pref_hist == "medium":
-                score += 0.5
-            elif pref_hist == "low" and cand_hist_score < 0.3:
-                score += 1.0
-            elif pref_hist == "low" and cand_hist_score < 0.7:
-                score += 0.5
-
-        if checks == 0:
+        axis_scores = [
+            _length_fit(
+                preferences.get("preferred_length"), candidate.get("length_category")
+            ),
+            _age_fit(
+                preferences.get("preferred_age"), candidate.get("age_style_category")
+            ),
+            _historical_fit(
+                preferences.get("historical_importance"),
+                candidate.get("historical_significance_score"),
+            ),
+        ]
+        scored = [s for s in axis_scores if s is not None]
+        if not scored:
             return 0.0
-
-        return score / checks
+        return sum(scored) / len(scored)
     except (TypeError, ValueError, AttributeError):
         return 0.0
+
+
+def explicit_filter_fit_score_for_parents(
+    candidate: dict | None,
+    parent_a_profile: dict | None,
+    parent_b_profile: dict | None,
+) -> float:
+    """
+    Score explicit filter fit against each parent independently, then average.
+
+    Unlike scoring against a single merged profile (which collapses to a
+    neutral value when parents disagree, erasing the signal), this honors each
+    parent's stated length/age/historical preference. A name that strongly
+    matches one parent therefore outranks a bland compromise that matches
+    neither.
+
+    When only one parent's preferences are available, falls back to that
+    parent's score.
+
+    Returns:
+        Float in [0.0, 1.0]. 0.0 if no preference data is available.
+    """
+    if not candidate:
+        return 0.0
+
+    a_has = bool(parent_a_profile) and _has_explicit_prefs(parent_a_profile)
+    b_has = bool(parent_b_profile) and _has_explicit_prefs(parent_b_profile)
+
+    if a_has and b_has:
+        a_score = explicit_filter_fit_score(candidate, parent_a_profile)
+        b_score = explicit_filter_fit_score(candidate, parent_b_profile)
+        return (a_score + b_score) / 2.0
+    if a_has:
+        return explicit_filter_fit_score(candidate, parent_a_profile)
+    if b_has:
+        return explicit_filter_fit_score(candidate, parent_b_profile)
+    return 0.0
+
+
+def _has_explicit_prefs(profile: dict) -> bool:
+    """True when a profile carries at least one explicit length/age/historical pref."""
+    return any(
+        profile.get(key)
+        for key in ("preferred_length", "preferred_age", "historical_importance")
+    )
 
 
 def bridge_score(
