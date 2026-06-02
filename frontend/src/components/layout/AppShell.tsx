@@ -14,7 +14,7 @@ interface AppShellProps {
 export default function AppShell({ children }: AppShellProps) {
   return (
     <PortraitContainer>
-      <div className="pb-16">
+      <div className="pb-24">
         {children}
       </div>
       <BottomNav />

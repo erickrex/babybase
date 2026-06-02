@@ -25,19 +25,23 @@ export default function BottomNav() {
 
   return (
     <nav className="bottom-nav">
-      <div className="flex items-center justify-around h-14">
+      <div className="flex items-center justify-around h-[90px]">
         {tabs.map((tab) => (
           <button
             key={tab.path}
             onClick={() => navigate(tab.path)}
-            className={`flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors ${
-              isActive(tab.path)
-                ? 'text-primary'
-                : 'text-text-muted hover:text-text-secondary'
-            }`}
+            className="flex items-center justify-center flex-1 h-full"
           >
-            <span className="text-lg">{tab.icon}</span>
-            <span className="text-xs font-medium">{tab.label}</span>
+            <span
+              className={`flex flex-col items-center justify-center gap-1 px-3 py-2 rounded-2xl transition-all duration-200 ${
+                isActive(tab.path)
+                  ? 'text-primary bg-primary-muted shadow-card'
+                  : 'text-text-muted hover:text-text-secondary hover:bg-bg-muted'
+              }`}
+            >
+              <span className="text-2xl">{tab.icon}</span>
+              <span className="text-xs font-medium">{tab.label}</span>
+            </span>
           </button>
         ))}
       </div>
