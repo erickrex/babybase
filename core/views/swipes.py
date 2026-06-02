@@ -77,7 +77,7 @@ def swipe_view(request: Request) -> Response:
 
     # Validate the swipe
     try:
-        validate_swipe(request.user, couple, name_id)
+        name = validate_swipe(request.user, couple, name_id)
         source_deck = validate_source_deck(couple, name_id, deck_id_str)
     except SwipeValidationError as e:
         logger.warning("Swipe validation failed: user=%s name=%s reason=%s", request.user.email, name_id, str(e))
@@ -114,13 +114,28 @@ def swipe_view(request: Request) -> Response:
                 "match_strength_score": match.match_strength_score,
                 "status": match.status,
             }
-            logger.info("Mutual match! couple=%s name=%s (%s)", couple.id, name_id, match.name.display_name)
+            logger.info(
+                "💞 [match] It's a match! couple=%s both partners liked '%s' (strength=%.3f)",
+                couple.id, match.name.display_name, match.match_strength_score,
+            )
 
     if created:
-        logger.debug("Swipe recorded: user=%s name=%s action=%s", request.user.email, name_id, action)
+        logger.info(
+            "👉 [swipe] couple=%s user=%s %s '%s'%s",
+            couple.id,
+            request.user.email,
+            {"like": "❤️ liked", "dislike": "👎 passed on", "maybe": "🤔 maybe'd"}.get(action, action),
+            name.display_name,
+            " (from deck)" if source_deck else "",
+        )
         # Refresh the swiper's taste vector on batch boundaries (Phase D signal).
         # Safe by contract: never raises into the swipe path.
         maybe_recompute_taste_vector(request.user)
+    else:
+        logger.info(
+            "👉 [swipe] couple=%s user=%s re-swiped '%s' (duplicate ignored, stored action=%s)",
+            couple.id, request.user.email, name.display_name, swipe.action,
+        )
 
     return Response(
         {

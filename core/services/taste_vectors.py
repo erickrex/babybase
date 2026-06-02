@@ -192,7 +192,10 @@ def compute_taste_vector(user):
     )
 
     if not liked_vectors:
-        logger.debug("No liked vectors for user %s, skipping taste vector computation", user.id)
+        logger.info(
+            "🧠 [taste] No liked-name vectors yet for user=%s (gender_pref=%s) — taste vector unchanged",
+            user.id, gender_preference,
+        )
         return None
 
     # Fetch dislike info separately for repulsion check
@@ -207,6 +210,11 @@ def compute_taste_vector(user):
     dislike_count = len(disliked_name_ids)
     total_swipes = all_swipes.count()
     like_rate = total_likes / total_swipes if total_swipes > 0 else 0.0
+
+    logger.info(
+        "🧠 [taste] user=%s: %d liked vector(s) from %d swipes (like_rate=%.2f), recency-weighting (14d half-life)",
+        user.id, len(liked_vectors), total_swipes, like_rate,
+    )
 
     # Step 3: Apply recency weighting
     like_weights = compute_recency_weights(liked_timestamps[: len(liked_vectors)])
@@ -227,6 +235,10 @@ def compute_taste_vector(user):
             dislike_weights = compute_recency_weights(disliked_timestamps_qs[: len(disliked_vectors)])
             dislike_centroid = compute_weighted_centroid(disliked_vectors, dislike_weights)
             final_vector = apply_dislike_repulsion(like_centroid, dislike_centroid)
+            logger.info(
+                "🧠 [taste] user=%s: high like_rate (%.2f) with %d dislikes — repelling away from disliked names",
+                user.id, like_rate, dislike_count,
+            )
 
     # Step 6: Normalize to unit length
     final_vector = normalize_vector(final_vector)
@@ -267,13 +279,25 @@ def compute_taste_vector(user):
     )
 
     logger.info(
-        "Taste vector computed for user %s: swipes=%d, like_rate=%.2f, confidence=%.3f, gender_filter=%s",
+        "🧠 [taste] user=%s vector updated: swipes=%d like_rate=%.2f confidence=%.3f gender_filter=%s",
         user.id,
         total_swipes,
         like_rate,
         confidence,
         gender_preference,
     )
+
+    passes, reason = check_trust_thresholds(taste_vector)
+    if passes:
+        logger.info(
+            "🧠 [taste] user=%s now TRUSTED for Phase D personalization (confidence=%.3f)",
+            user.id, confidence,
+        )
+    else:
+        logger.info(
+            "🧠 [taste] user=%s not yet trusted for Phase D (reason=%s) — decks stay on Phase C",
+            user.id, reason,
+        )
 
     return taste_vector
 
@@ -297,10 +321,14 @@ def maybe_recompute_taste_vector(user) -> bool:
     if swipe_count == 0 or swipe_count % TASTE_VECTOR_BATCH_SIZE != 0:
         return False
 
+    logger.info(
+        "🧠 [taste] Swipe batch boundary hit (%d swipes) for user=%s — recomputing taste vector",
+        swipe_count, user.id,
+    )
     try:
         compute_taste_vector(user)
     except Exception:
-        logger.exception("Failed to recompute taste vector for user %s", user.id)
+        logger.exception("🧠 [taste] Failed to recompute taste vector for user %s", user.id)
     return True
 
 

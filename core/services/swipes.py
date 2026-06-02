@@ -179,7 +179,7 @@ def create_match(couple: Couple, name_id: str) -> MutualMatch:
         match_strength_score=strength,
         status=MatchStatus.ACTIVE,
     )
-    logger.info("Match created: couple=%s name=%s strength=%.3f", couple.id, name_id, strength)
+    logger.info("💞 [match] Recorded MutualMatch couple=%s name=%s strength=%.3f", couple.id, name_id, strength)
     return match
 
 
