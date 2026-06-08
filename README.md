@@ -7,7 +7,7 @@ Tinder for baby names - a mobile-first web app where partners swipe on baby name
 - **Backend**: Django 5.x + Django REST Framework (API-only)
 - **Frontend**: React 19 (Vite) + TypeScript + Tailwind CSS
 - **Database**: PostgreSQL
-- **Vector Search**: Qdrant (semantic name recommendations)
+- **Vector Search**: Qdrant (semantic, phonetic, and cross-cultural name retrieval)
 - **Embeddings**: AWS Bedrock Titan Embed V2 `amazon.titan-embed-text-v2:0`
 - **Auth**: Token-based via DRF
 - **Python Package Manager**: UV
@@ -18,8 +18,8 @@ Tinder for baby names - a mobile-first web app where partners swipe on baby name
 - Node.js 20+
 - PostgreSQL 15+
 - [UV](https://docs.astral.sh/uv/getting-started/installation/) (Python package manager)
-- Qdrant instance (cloud or local) - required for recommendation decks and similar-name search
-- AWS credentials configured for Bedrock Runtime - required for recommendation deck generation and indexing
+- Qdrant instance (cloud or local) - required for recommendation decks, similar-name search, and the constellation map
+- AWS credentials configured for Bedrock Runtime when producing embeddings. BabyBase uses Titan Embed V2, model `amazon.titan-embed-text-v2:0`.
 
 ## Setup
 
@@ -36,7 +36,7 @@ cp .env.example .env
 npm install
 ```
 
-Edit `.env` before running the app. At minimum, set PostgreSQL connection values, `QDRANT_URL`, and the AWS Bedrock region.
+Edit `.env` before running the app. At minimum, set PostgreSQL connection values, `QDRANT_URL`, and the AWS Bedrock region used for embeddings.
 
 For local Qdrant without an API key:
 
@@ -63,7 +63,7 @@ For Qdrant Cloud, set `QDRANT_URL` and `QDRANT_API_KEY` in `.env` instead.
 
 ### 3. Configure AWS access
 
-Use whichever AWS credential flow is standard for your machine, such as a named AWS CLI profile, environment variables, or an application role. Verify the active account before running Django commands, indexing jobs, CDK commands, or anything else that touches AWS:
+Use whichever AWS credential flow is standard for your machine, such as a named AWS CLI profile, environment variables, or an application role. Verify the active account before running commands that produce embeddings with Bedrock:
 
 ```bash
 export AWS_PROFILE=your-profile
@@ -72,38 +72,13 @@ export AWS_REGION=us-east-1
 aws sts get-caller-identity
 ```
 
-The backend uses Bedrock Runtime with Titan Embed V2 for embeddings:
+BabyBase uses Bedrock Runtime with Titan Embed V2 for embeddings:
 
 ```text
 amazon.titan-embed-text-v2:0
 ```
 
 The embedding model returns 1024-dimensional vectors. The app validates this dimension before indexing or querying Qdrant.
-
-The phonetic enrichment flow also uses Bedrock Nova, Amazon Polly, and S3:
-
-```text
-amazon.nova-lite-v1:0
-```
-
-The active AWS identity, or the deployed application role it provisions, needs:
-
-```text
-arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0
-arn:aws:bedrock:*::foundation-model/amazon.nova-lite-v1:0
-polly:SynthesizeSpeech
-s3:PutObject and s3:GetObject on the pronunciation audio bucket's pronunciations/ prefix
-```
-
-The `infra/` CDK project contains IAM and S3 resources for Bedrock invocation and pronunciation audio:
-
-```bash
-cd infra
-npm install
-npm test
-npm run build
-npm run cdk synth
-```
 
 ### 4. Initialize the database
 
@@ -144,6 +119,21 @@ If Qdrant Cloud writes are slow or timing out, lower the batch size:
 ```bash
 uv run python manage.py index_names_to_qdrant --batch-size 5
 ```
+
+Optional enrichment and map backfills:
+
+```bash
+# Generate cached phonetic profiles for active names
+uv run python manage.py enrich_phonetics
+
+# Generate stored pronunciation audio for active names
+uv run python manage.py generate_pronunciations
+
+# Compute 2D coordinates for the constellation map after Qdrant indexing
+uv run python manage.py compute_projections
+```
+
+Run `enrich_phonetics` before a full reindex when you want the `phonetic_style` vector to use cached phonetic profile data. Run `compute_projections` after indexing so `/api/v1/constellation/` can return positioned names.
 
 ### 6. Optional demo data
 
@@ -231,12 +221,10 @@ uv run python manage.py shell -c "from core.models import NameVectorIndexRef; pr
 | `QDRANT_COLLECTION` | `names_global_v1` | Qdrant collection queried and indexed by the app |
 | `QDRANT_TIMEOUT_SECONDS` | `180` | Qdrant client timeout for search and indexing requests |
 | `AWS_BEDROCK_REGION` | `us-east-1` | AWS region for Bedrock Runtime API |
-| `NOVA_MODEL_ID` | `amazon.nova-lite-v1:0` | Bedrock Nova model used to generate cached phonetic profiles |
-| `PRONUNCIATION_AUDIO_BUCKET` | - | Private S3 bucket for Polly pronunciation audio |
-| `PRONUNCIATION_VOICE` | `Joanna` | Amazon Polly neural voice used for pronunciation audio |
-| `PRONUNCIATION_URL_TTL_SECONDS` | `3600` | TTL for presigned pronunciation audio URLs |
 | `LOG_LEVEL` | `INFO` | Logging level for `core` logger |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Allowed CORS origins |
+
+Additional feature-specific settings are listed in `.env.example`.
 
 ### Frontend (`frontend/.env`)
 
@@ -294,7 +282,7 @@ Use `--batch-size 5` or another small value when indexing into a slow remote Qdr
 
 If `/api/v1/recommendations/deck/` returns an error or no usable results:
 
-1. Confirm both partners are in an active couple and both completed onboarding.
+1. Confirm the user completed onboarding. For partnered couples, confirm the couple is active and both partners completed onboarding.
 2. Confirm `QDRANT_URL`, `QDRANT_API_KEY`, and `QDRANT_COLLECTION` point to the same collection you indexed.
 3. Confirm name metadata exists:
    ```bash
@@ -331,6 +319,7 @@ All endpoints are under `/api/v1/`.
 |--------|------|-------------|
 | POST | `/auth/register/` | Register new user |
 | POST | `/auth/login/` | Login, returns token |
+| POST | `/auth/logout/` | Logout and delete the current token |
 | GET | `/profile/me/` | Get current user profile |
 | PATCH | `/profile/me/` | Update profile |
 | POST | `/couples/invite/` | Invite partner |
@@ -342,9 +331,17 @@ All endpoints are under `/api/v1/`.
 | GET | `/matches/` | List mutual matches |
 | GET | `/matches/:name_id/` | Match detail |
 | GET | `/matches/:name_id/similar/` | Similar names |
+| GET | `/matches/:name_id/sounds-like/` | Similar-sounding names with pronunciation audio URLs when available |
 | GET/POST | `/shortlist/` | View/manage finalists |
 | GET | `/constellation/` | 2D name map data |
 | GET | `/health/` | Health check |
+
+Deck generation accepts:
+
+- `mode`: one of `best_match`, `bridge_names`, `more_like_this`, `wildcard`, `cross_cultural`, or `sounds_like`
+- `force_refresh`: optional boolean. Use `true` for a manual refresh; normal initial loads should omit it or send `false`.
+
+Cached deck responses return HTTP 200 with `data.cached: true`. Freshly generated decks return HTTP 201 with `data.cached: false`.
 
 ## Commands
 
@@ -354,12 +351,19 @@ uv run python manage.py runserver 0.0.0.0:8000   # Start server
 uv run pytest                                     # Run tests
 uv run ruff check .                               # Lint
 uv run ruff format .                              # Format
+uv run python manage.py seed_real_names           # Seed bundled SSA-derived names
+uv run python manage.py index_names_to_qdrant     # Index active names in Qdrant
+uv run python manage.py compute_projections       # Compute constellation map coordinates
 
 # Frontend
 cd frontend && npm run dev                        # Dev server
 cd frontend && npm run build                      # Production build
 cd frontend && npm run lint                       # ESLint
 cd frontend && npm run test                       # Vitest
+
+# Infrastructure
+cd infra && npm test -- --runInBand               # CDK tests
+cd infra && npm run build                         # CDK TypeScript build
 ```
 
 ## Project Structure
@@ -393,9 +397,10 @@ babybase/
 
 ## How It Works
 
-1. **Register** - both partners create accounts
-2. **Invite** - one partner invites the other by email
-3. **Onboard** - each partner sets name preferences (backgrounds, style, gender, length)
-4. **Swipe** - a recommendation deck is generated using semantic search (Qdrant) and multi-signal scoring; partners swipe independently
-5. **Match** - when both parents like the same name, it becomes a mutual match
-6. **Finalists** - promote top matches to a focused decision list
+1. **Register** - users create accounts and sign in with token auth.
+2. **Onboard** - each user sets name preferences such as backgrounds, style, gender, and length.
+3. **Swipe solo or together** - a user can start with solo onboarding, or invite a partner and swipe as an active couple.
+4. **Generate decks** - decks are built from Qdrant retrieval and multi-signal scoring, with cached decks reused until refreshed, expired, or exhausted.
+5. **Match** - when both partners like the same active name in the same couple, it becomes a mutual match.
+6. **Explore** - matches can show similar names, similar-sounding names, pronunciation audio, shortlist status, and constellation map placement.
+7. **Finalists** - promote top matches to a focused decision list.
