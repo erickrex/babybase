@@ -32,14 +32,17 @@ flowchart LR
 | Swipes/matches | `core/views/swipes.py`, `core/services/swipes.py` | Validate provenance, record swipes, create matches, similar-name search. |
 | Taste vectors | `core/services/taste_vectors.py` | Learn per-user vectors; decide Phase C vs D. |
 | Embeddings | `core/services/embeddings.py` | Build embedding text, call Bedrock. |
+| Phonetic profiles | `core/services/phonetics.py`, `enrich_phonetics.py` | Cache pronunciation metadata used by `phonetic_style` embeddings. |
+| Pronunciation audio | `core/services/pronunciation.py`, `generate_pronunciations.py` | Generate, store, and presign pronunciation audio for match details and Sounds Like. |
 | Qdrant access | `core/services/qdrant_client.py` | Search named vectors, filter payloads, retrieve anchors. |
 | Indexing | `core/management/commands/index_names_to_qdrant.py` | Generate named vectors + payloads for active names. |
 | PCA projection | `core/services/projection.py`, `compute_projections.py` | 1024-dim semantic vectors → 2D map coords. |
 | Name map | `core/services/name_map.py` | Assemble map points, statuses, neighborhoods. |
+| Deck UI | `frontend/src/pages/deck/DeckPage.tsx`, `frontend/src/hooks/useDeck.ts` | Frontend mode toggle, deck loading, refresh, and swipe workflow. |
 
 ## Data Model
 
-- `Name`: canonical record with metadata and optional `x_2d`/`y_2d` map coords.
+- `Name`: canonical record with metadata, optional `x_2d`/`y_2d` map coords, cached `phonetic_profile`, and optional `pronunciation_audio` storage reference.
 - `NameVectorIndexRef`: maps a `Name` to a Qdrant point ID.
 - `Couple`: the scope for swipes, matches, decks, exclusions.
 - `Swipe`: a user's `like` / `dislike` / `maybe` on a name.
@@ -66,6 +69,8 @@ Each active name is indexed into Qdrant with three named 1024-dim vectors, all f
 > Accuracy note: the payload stores the derived string `historical_importance`, not the float `historical_significance_score`. Reranking's `filter_fit` reads `historical_significance_score`, so in the live deck pipeline its historical axis is usually absent and contributes nothing — `filter_fit` effectively scores length and age. Closing this gap requires adding the score to the payload and reindexing.
 
 When embedding text builders or the payload schema change, existing vectors are stale until reindexed.
+
+`phonetic_style` is most useful after `enrich_phonetics` has populated `Name.phonetic_profile`. If profiles are missing, `build_phonetic_text` still produces deterministic spelling-derived sound-shape text, so indexing remains offline and non-empty.
 
 ## Deck Generation
 
@@ -111,6 +116,8 @@ sequenceDiagram
 | `sounds_like` | Avg phonetic vector of mutual matches | `phonetic_style` | Similar sound |
 | `cross_cultural` | Avg cross-cultural vector of mutual matches, else profile fallback | `cross_cultural` | Travels across cultures |
 | `wildcard` | Couple profile embedding, wider retrieval + rerank boost | `semantic` | Plausible surprises |
+
+Backend validation accepts all six modes. The current deck page exposes only the primary user-facing toggle: `best_match` and `sounds_like`.
 
 ## Phase C vs Phase D
 
@@ -216,6 +223,24 @@ Both are **constrained to the couple's baby gender** (`_build_similar_name_filte
 
 Some overlap between the two lists is legitimate when a cluster is both semantically and phonetically close (e.g. Samuel / Emanuel / Manuel). Excessive overlap usually means weak phonetic metadata, semantic-leaning fallback text, stale Qdrant vectors after a text-builder change, or a tiny post-filter candidate set.
 
+Match detail and Sounds Like responses include `audio_url` when a name has stored pronunciation audio and the backend can presign it. Missing audio is represented as `null`, not an API error.
+
+## Phonetic Profiles and Audio
+
+`enrich_phonetics` backfills `Name.phonetic_profile` for active names. The profile fields (`ipa`, `rhyme`, `syllables`, `stress`, `sounds_like`) feed `build_phonetic_text`, which then produces the `phonetic_style` vector during Qdrant indexing.
+
+`generate_pronunciations` backfills `Name.pronunciation_audio` for active names. Audio is stored privately and served through time-limited presigned URLs from `presign_audio_url`.
+
+Operational order for the richest sound features:
+
+```bash
+uv run python manage.py enrich_phonetics
+uv run python manage.py index_names_to_qdrant --force-recreate
+uv run python manage.py generate_pronunciations
+```
+
+`enrich_phonetics` should run before reindexing when the phonetic vector text changed or when names were newly enriched. Pronunciation audio can run before or after indexing because it affects API audio URLs, not vector content.
+
 ## Cross-Cultural Search
 
 Searches the `cross_cultural` space (built from languages, scripts, variants, international usability). Query is the average cross-cultural vector of mutual matches, or a couple-profile embedding fallback. Rerank boosts `international_score`. Results can overlap best_match but the retrieval basis and emphasis differ.
@@ -268,20 +293,28 @@ aws sts get-caller-identity
 Maintenance:
 
 ```bash
+# Backfill cached phonetic profiles used by phonetic_style indexing.
+uv run python manage.py enrich_phonetics --batch-size 50
+
 # Reindex active names into Qdrant (and, unless skipped, recompute PCA after).
 uv run python manage.py index_names_to_qdrant --force-recreate --batch-size 10
 
 # Recompute PCA coordinates from existing Qdrant semantic vectors.
 uv run python manage.py compute_projections --force
+
+# Backfill pronunciation audio for match detail and Sounds Like playback.
+uv run python manage.py generate_pronunciations --batch-size 50
 ```
 
-Use a small Bedrock batch size to avoid rate-limit pressure.
+Use smaller batch sizes when remote services are slow or rate-limited. Pass `--skip-projection` to `index_names_to_qdrant` only when you plan to run `compute_projections --force` separately.
 
 ## Debugging
 
 **Deck too repetitive:** diversity constraints bypassed by uniformly high scores? candidate pool too small after filters/exclusions? cached deck reused instead of refreshed? origins/styles missing from payloads? → `recommendations.py`, `relevance.py`.
 
-**More Like This and Sounds Like too similar:** does `phonetic_style` exist in Qdrant? reindexed after phonetic text changes? anchor has a rich phonetic profile? fallback text sound-shape based? candidate set too small? → `embeddings.py`, `qdrant_client.py`, `swipes.py`, `index_names_to_qdrant.py`.
+**More Like This and Sounds Like too similar:** does `phonetic_style` exist in Qdrant? reindexed after phonetic text changes? anchor has a rich phonetic profile? spelling-derived phonetic text too weak? candidate set too small? → `phonetics.py`, `embeddings.py`, `qdrant_client.py`, `swipes.py`, `index_names_to_qdrant.py`.
+
+**Pronunciation audio missing:** does the name have `pronunciation_audio`? can `presign_audio_url` access the stored bucket/key? did `generate_pronunciations` fail or skip the name? → `pronunciation.py`, `generate_pronunciations.py`, `swipes.py`.
 
 **Recommendations ignore taste:** each user ≥20 swipes? like rate in [0.1, 0.8]? vectors fresh? `maybe_recompute_taste_vector` ran? `select_phase` falling back to Phase C (check reason)? → `taste_vectors.py`.
 
